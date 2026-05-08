@@ -1,0 +1,106 @@
+# ============================================================
+# 따릉이 재배치 최적화 프로젝트 - 기본 설정
+# ============================================================
+
+# --- 권역 설정 ---
+district:
+  # 자치구 코드 또는 정류소 ID 리스트로 필터링
+  # 아래 둘 중 하나만 설정 (station_ids 우선)
+  district_code: "강남구"
+  station_ids: null  # 직접 지정 시: [ST-001, ST-002, ...]
+
+# --- 시뮬레이션 설정 ---
+simulation:
+  step_duration_min: 10        # 1 step = 10분
+  episode_duration_min: 1440   # 1 episode = 24시간 (1440분)
+  episode_start_hour: 0        # episode 시작 시각 (0 = 매번 00:00 고정)
+  target_fill_ratio: 0.5       # 적재/하차 휴리스틱 목표 비율
+  # 초기 자전거 분포
+  #   data_based: 대여 이력에서 episode_start_hour 시점 분포 추정 (권장)
+  #   uniform:    모든 정류소 용량의 initial_fill_ratio로 초기화
+  initial_distribution: "data_based"
+  initial_fill_ratio: 0.5      # uniform 모드 또는 data_based 모드의 fallback
+  # 수요 생성 방식
+  #   replay: 과거 대여 이력 그대로 재생 (Phase 2~4 기본)
+  #   poisson: 시간/날씨 조건부 Poisson 샘플링 (Phase 6 확장)
+  demand_mode: "replay"
+
+# --- 트럭 설정 ---
+truck:
+  n_trucks: 3                  # 동시 운영 트럭 수
+  capacity: 20                 # 트럭 1대 최대 적재량
+  speed_kmh: 25.0              # 평균 이동 속도 (km/h)
+  # 다중 트럭 제어 방식
+  #   parameter_sharing: 모든 트럭이 같은 Q-network 공유 (추천, single-agent wrapper)
+  #   independent: 트럭마다 독립 Q-network
+  #   centralized: 단일 에이전트가 N대 동시 결정 (action space 폭증)
+  control_mode: "parameter_sharing"
+  # action mask: 이동 중인 트럭 / 자기 위치 / 충돌 회피 차단
+  use_action_mask: true
+
+# --- 보상 가중치 ---
+reward:
+  stockout: -1.0               # 대여 실패 1건당
+  full: -0.8                   # 반납 실패 1건당
+  travel_distance_km: -0.01    # 이동 1km당
+  travel_step: -0.005          # 이동 1step(10분)당
+
+# --- 정규화 범위 (날씨) ---
+normalize:
+  temperature_min: -20.0
+  temperature_max: 40.0
+  precipitation_max: 100.0     # mm/h
+  wind_speed_max: 30.0         # m/s
+  humidity_min: 0.0
+  humidity_max: 100.0
+  max_travel_steps: 10         # 이동 step 정규화용 최대값
+
+# --- 베이스라인 정책 (Phase 3) ---
+baseline:
+  noop:
+    enabled: true              # 트럭이 아예 움직이지 않음 (재배치 효과 자체 검증용)
+  heuristic:
+    enabled: true
+    rule: "most_imbalanced"    # 가장 비어있는/가득 찬 정류소로 이동
+
+# --- 알고리즘 선택 (Phase 4-5) ---
+algorithm:
+  name: "dqn"                  # dqn | double_dqn | dueling_dqn
+  double_q: false              # true면 Double DQN (Q-value 과대추정 완화)
+  dueling: false               # true면 Dueling DQN (커스텀 net_arch 필요)
+
+# --- DQN 하이퍼파라미터 ---
+dqn:
+  learning_rate: 0.0001
+  buffer_size: 100000
+  batch_size: 64
+  gamma: 0.99
+  exploration_fraction: 0.3
+  exploration_final_eps: 0.05
+  target_update_interval: 1000
+  train_freq: 4
+  gradient_steps: 1
+  policy_kwargs:
+    net_arch: [256, 256]
+
+# --- 학습 설정 ---
+training:
+  total_timesteps: 500000
+  log_interval: 10
+  eval_freq: 10000
+  n_eval_episodes: 5
+  seed: 42
+
+# --- 데이터 경로 ---
+data:
+  rental_history: "data/raw/rental_history.csv"
+  station_master: "data/raw/station_master.csv"
+  weather: "data/raw/weather.csv"
+  holidays: "data/raw/holidays.csv"
+  processed_dir: "data/processed/"
+  # 학습/평가 시간순 분할 (9:3)
+  split:
+    train_start: "2024-01-01"
+    train_end: "2024-09-30"
+    eval_start: "2024-10-01"
+    eval_end: "2024-12-31"
