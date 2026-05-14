@@ -176,7 +176,7 @@
 | 1 | **권역 선택** | 마포구 / 강남구 / 종로구 / ... | 정류소 수 → action space 크기 결정 |
 | 2 | **다중 트럭 제어 방식** | (a) Centralized / **(b) Parameter Sharing** / (c) Independent / (d) CTDE | 신경망 구조, action space, 라이브러리 호환성 |
 | 3 | **시간 해상도** | 1 step = 5분 / **10분** / 15분 | DQN이 결정을 내리는 주기, episode당 step 수 → 학습 시간 |
-| 4 | **Episode 길이** | **24h** / 12h / 6h | 학습 난이도, 평가 일관성 |
+| 4 | **Episode 길이** | **24h** / 12h / 6h | 학습 난이도, 평가 일관성, 24h 안에 출근/점심/퇴근/야간 패턴이 한번씩 나오므로 적합 |
 | 5 | **Action 정의** | 정류소 선택 / 정류소+수량 / 경로 | action space 크기, 복잡도 |
 | 6 | **적재/하차 수량 규칙** | 규칙 기반(자동) / 학습 대상 | action 차원 결정 |
 | 7 | **수요 모델** | **Replay** / Poisson / Hybrid | 시뮬레이터 구현 방식 |
