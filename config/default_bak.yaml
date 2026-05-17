@@ -65,27 +65,21 @@ baseline:
 
 # --- 알고리즘 선택 (Phase 4-5) ---
 algorithm:
-  name: "ppo"                 # ppo | (other algos)
-  # PPO-specific settings (kept separate from the `dqn` block)
-  clip_range: 0.2
-  gae_lambda: 0.95
-  ent_coef: 0.0
-  vf_coef: 0.5
-  max_grad_norm: 0.5
-
+  name: "dqn"                  # dqn | double_dqn | dueling_dqn
+  double_q: false              # true면 Double DQN (Q-value 과대추정 완화)
+  dueling: false               # true면 Dueling DQN (커스텀 net_arch 필요)
 
 # --- DQN 하이퍼파라미터 ---
-ppo:
-  learning_rate: 0.0003
-  n_steps: 2048
+dqn:
+  learning_rate: 0.0001
+  buffer_size: 100000
   batch_size: 64
-  n_epochs: 10
   gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  ent_coef: 0.0
-  vf_coef: 0.5
-  max_grad_norm: 0.5
+  exploration_fraction: 0.3
+  exploration_final_eps: 0.05
+  target_update_interval: 1000
+  train_freq: 4
+  gradient_steps: 1
   policy_kwargs:
     net_arch: [256, 256]
 
