@@ -1,0 +1,20 @@
+# RL 프레임워크
+gymnasium>=0.29.0
+stable-baselines3>=2.3.0
+
+# 데이터 처리
+numpy>=1.24.0
+pandas>=2.0.0
+
+# 설정
+pyyaml>=6.0
+
+# 시각화 / 로깅
+matplotlib>=3.7.0
+tensorboard>=2.14.0
+
+# 지리 계산 (선택)
+# geopy>=2.4.0
+
+# 유틸
+tqdm>=4.65.0
