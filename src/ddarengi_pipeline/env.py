@@ -17,12 +17,31 @@ from gymnasium import spaces
 
 from . import loader, replay
 
+# Global cache for rental dataframe to avoid loading multiple times
+_rental_df_cache = {}
+
 
 def _load_config():
     base = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     cfg_path = os.path.join(base, "config", "default.yaml")
     with open(cfg_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def _load_rental_df_cached(ddarengi_dir, cache_key="default", max_rows=None, sample_frac=None):
+    """Load rental history data with caching to avoid reloading."""
+    if cache_key in _rental_df_cache:
+        print(f"Using cached rental data (cache_key={cache_key})")
+        return _rental_df_cache[cache_key]
+    
+    print(f"Loading rental history from: {ddarengi_dir}")
+    df = loader.load_rental_history_from_dir(
+        ddarengi_dir,
+        max_rows=max_rows,
+        sample_frac=sample_frac,
+    )
+    _rental_df_cache[cache_key] = df
+    return df
 
 
 class RebalEnv(gym.Env):
@@ -43,10 +62,26 @@ class RebalEnv(gym.Env):
         self.episode_min = int(self.cfg.get("simulation", {}).get("episode_duration_min", 1440))
         self.steps_per_episode = max(1, self.episode_min // self.step_min)
 
-        # load rental history
+        # load rental history once (with caching)
         base = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         ddarengi_dir = os.path.join(base, "data", "ddarengi")
-        df = loader.load_rental_history_from_dir(ddarengi_dir)
+        
+        data_cfg = self.cfg.get("data", {})
+        max_rows = data_cfg.get("max_rows_to_load")
+        sample_frac = data_cfg.get("sample_frac")
+        if max_rows is not None:
+            max_rows = int(max_rows)
+        if sample_frac is not None:
+            sample_frac = float(sample_frac)
+
+        df = _load_rental_df_cached(
+            ddarengi_dir,
+            cache_key=f"default_{max_rows}_{sample_frac}",
+            max_rows=max_rows,
+            sample_frac=sample_frac,
+        )
+        print(f"Loaded {len(df)} rental records")
+        
         self.rental_df = df
 
         # Verify that canonical columns exist after loading
@@ -74,6 +109,7 @@ class RebalEnv(gym.Env):
         if self.n_stations == 0:
             raise ValueError("No stations available after filtering")
 
+        print(f"Using {self.n_stations} stations: {self.stations}")
 
         # action: 0 = noop, 1..n_stations -> move one bike to station idx-1
         self.action_space = spaces.Discrete(self.n_stations + 1)
@@ -82,57 +118,72 @@ class RebalEnv(gym.Env):
         obs_len = self.n_stations + 2
         self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(obs_len,), dtype=np.float32)
 
-        # station capacity
+        # station capacity from config
         self.station_capacity = int(self.cfg.get("truck", {}).get("capacity", 20))
+        print(f"Station capacity: {self.station_capacity}")
 
         # pre-aggregate events per step for the entire dataset timeline
         self._prepare_step_events()
 
         self.current_step = 0
-        self.bikes = {s: int(self.station_capacity * self.cfg.get("simulation", {}).get("initial_fill_ratio", 0.5)) for s in self.stations}
+        initial_fill_ratio = float(self.cfg.get("simulation", {}).get("initial_fill_ratio", 0.5))
+        self.bikes = {s: int(self.station_capacity * initial_fill_ratio) for s in self.stations}
+        print(f"Initial bike distribution (fill_ratio={initial_fill_ratio}): {self.bikes}")
 
-        # reward weights
+        # reward weights from config
         self.r_stock = float(self.cfg.get("reward", {}).get("stockout", -1.0))
         self.r_full = float(self.cfg.get("reward", {}).get("full", -0.8))
         self.r_travel_km = float(self.cfg.get("reward", {}).get("travel_distance_km", -0.01))
         self.r_travel_step = float(self.cfg.get("reward", {}).get("travel_step", -0.005))
+        
+        print(f"Reward weights:")
+        print(f"  stockout: {self.r_stock}")
+        print(f"  full: {self.r_full}")
+        print(f"  travel_km: {self.r_travel_km}")
+        print(f"  travel_step: {self.r_travel_step}")
 
     def _prepare_step_events(self):
-        # bin events by step index relative to the first timestamp
+        """Prepare step events using vectorized operations for efficiency."""
         df = self.rental_df
         first = df["start_time"].min()
         if pd.isna(first):
             first = pd.Timestamp.now()
-        # convert times to step index
+        
+        # convert times to step index (vectorized)
         step_seconds = self.step_min * 60
-
-        def to_step(ts):
-            if pd.isna(ts):
-                return None
-            return int((pd.to_datetime(ts) - first).total_seconds() // step_seconds)
-
+        
         df = df.copy()
-        df["rent_step"] = df["start_time"].apply(to_step)
+        df["rent_step"] = ((df["start_time"] - first).dt.total_seconds() // step_seconds).astype('Int64')
         if "end_time" in df.columns:
-            df["return_step"] = df["end_time"].apply(to_step)
+            df["return_step"] = ((df["end_time"] - first).dt.total_seconds() // step_seconds).astype('Int64')
 
-        self.max_data_step = int(max(df["rent_step"].dropna().max() if not df["rent_step"].dropna().empty else 0,
-                                     df["return_step"].dropna().max() if "return_step" in df.columns and not df["return_step"].dropna().empty else 0))
+        # Calculate max step
+        max_rent_step = df["rent_step"].max() if not df["rent_step"].isna().all() else 0
+        max_return_step = (df["return_step"].max() if "return_step" in df.columns and not df["return_step"].isna().all() else 0)
+        self.max_data_step = int(max(max_rent_step, max_return_step))
 
-        # create mapping step -> list of (type, station)
+        print(f"Preparing step events... (max_step={self.max_data_step})")
+        
+        # create mapping step -> list of (type, station) using groupby (more efficient)
         events = {}
-        for _, row in df.iterrows():
-            rs = row.get("rent_step")
-            ss = row.get("start_station_id")
-            if rs is not None and not pd.isna(rs) and ss in self.stations:
-                events.setdefault(int(rs), []).append(("rent", str(ss)))
-            if "return_step" in row and not pd.isna(row.get("return_step")):
-                rts = row.get("return_step")
-                es = row.get("end_station_id")
-                if rts is not None and es in self.stations:
-                    events.setdefault(int(rts), []).append(("return", str(es)))
+        
+        # Process rent events
+        rent_events = df[["rent_step", "start_station_id"]].dropna().copy()
+        rent_events = rent_events[rent_events["start_station_id"].astype(str).isin(self.stations)]
+        for step, group in rent_events.groupby("rent_step"):
+            step = int(step)
+            events.setdefault(step, []).extend([("rent", str(sid)) for sid in group["start_station_id"].values])
+        
+        # Process return events
+        if "return_step" in df.columns:
+            return_events = df[["return_step", "end_station_id"]].dropna().copy()
+            return_events = return_events[return_events["end_station_id"].astype(str).isin(self.stations)]
+            for step, group in return_events.groupby("return_step"):
+                step = int(step)
+                events.setdefault(step, []).extend([("return", str(sid)) for sid in group["end_station_id"].values])
 
         self.step_events = events
+        print(f"✓ Prepared events for {len(self.step_events)} steps")
 
     def reset(self, *, seed: Optional[int] = None, options=None):
         super().reset(seed=seed)
@@ -151,6 +202,14 @@ class RebalEnv(gym.Env):
         return obs
 
     def step(self, action):
+        """Execute one step of the environment.
+        
+        Args:
+            action: 0 = noop, i>0 = move one bike to station i-1
+            
+        Returns:
+            obs, reward, terminated, truncated, info
+        """
         # apply action: 0 noop, i>0 move one bike to station i-1
         travel_cost = 0.0
         if action != 0:
@@ -165,8 +224,14 @@ class RebalEnv(gym.Env):
                 else:
                     # return failed (treated as full)
                     pass
-                # approximate travel cost per move
-                travel_cost += self.r_travel_km * 0.1  # assume 0.1 km per move
+                # cost for moving a bike: includes step cost + distance cost
+                travel_cost = self.r_travel_km * 0.1 + self.r_travel_step  # 0.1 km per move
+            else:
+                # No valid bike to move, but still pay step cost
+                travel_cost = self.r_travel_step
+        else:
+            # No-op action: only pay base step cost
+            travel_cost = self.r_travel_step
 
         # process demand events for this step
         stockout = 0
@@ -184,13 +249,13 @@ class RebalEnv(gym.Env):
                 else:
                     full += 1
 
-        # reward is negative penalties
-        reward = stockout * self.r_stock + full * self.r_full + travel_cost + self.r_travel_step
+        # reward is negative penalties + travel costs
+        reward = stockout * self.r_stock + full * self.r_full + travel_cost
 
         self.current_step += 1
         done = self.current_step >= self.steps_per_episode
         obs = self._get_obs()
-        info = {"stockout": stockout, "full": full}
+        info = {"stockout": stockout, "full": full, "travel_cost": travel_cost}
         return obs, float(reward), done, False, info
 
     def render(self, mode="human"):

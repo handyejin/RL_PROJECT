@@ -91,7 +91,7 @@ ppo:
 
 # --- 학습 설정 ---
 training:
-  total_timesteps: 500000
+  total_timesteps: 10000
   log_interval: 10
   eval_freq: 10000
   n_eval_episodes: 5
@@ -104,6 +104,9 @@ data:
   weather: "data/raw/weather.csv"
   holidays: "data/raw/holidays.csv"
   processed_dir: "data/processed/"
+  # 데이터 로딩 시 메모리 사용을 줄이기 위한 샘플 제한
+  max_rows_to_load: 250000
+  sample_frac: null
   # 학습/평가 시간순 분할 (9:3)
   split:
     train_start: "2024-01-01"

@@ -5,15 +5,15 @@ from typing import List
 import pandas as pd
 
 
-def _try_read_csv(path: str, nrows=None):
+def _try_read_csv(path: str, nrows=None, usecols=None):
     encodings = ["cp949", "utf-8", "euc-kr"]
     for enc in encodings:
         try:
-            return pd.read_csv(path, encoding=enc, nrows=nrows)
+            return pd.read_csv(path, encoding=enc, nrows=nrows, usecols=usecols)
         except Exception:
             continue
     # last resort
-    return pd.read_csv(path, engine="python", error_bad_lines=False)
+    return pd.read_csv(path, engine="python", error_bad_lines=False, nrows=nrows)
 
 
 def _canonicalize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -81,8 +81,14 @@ def _canonicalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def load_rental_history_from_dir(ddarengi_dir: str, nrows=None) -> pd.DataFrame:
-    """Load and concatenate all rental history CSVs from a directory.
+def load_rental_history_from_dir(ddarengi_dir: str, nrows=None, max_rows=None, sample_frac=None) -> pd.DataFrame:
+    """Load and concatenate rental history CSVs from a directory.
+
+    Args:
+        ddarengi_dir: directory containing CSV rental history files.
+        nrows: read only the first nrows of each file.
+        max_rows: stop loading once this many rows are collected across all files.
+        sample_frac: if set, randomly sample this fraction from each file.
 
     Returns a DataFrame with canonical columns: `start_time`, `end_time`,
     `start_station_id`, `end_station_id` when possible.
@@ -92,19 +98,45 @@ def load_rental_history_from_dir(ddarengi_dir: str, nrows=None) -> pd.DataFrame:
     if not files:
         raise FileNotFoundError(f"No CSV files found in {ddarengi_dir}")
 
+    print(f"Found {len(files)} CSV files in {ddarengi_dir}")
+    
     dfs = []
-    for f in files:
-        try:
-            df = _try_read_csv(f, nrows=nrows)
-        except Exception as e:
-            continue
-        df = _canonicalize_columns(df)
-        dfs.append(df)
+    total_rows = 0
+    for i, f in enumerate(files):
+        if max_rows is not None and total_rows >= max_rows:
+            break
 
+        try:
+            print(f"  Loading file {i+1}/{len(files)}: {os.path.basename(f)}")
+            file_nrows = nrows
+            if file_nrows is None and max_rows is not None:
+                file_nrows = max_rows - total_rows
+            df = _try_read_csv(f, nrows=file_nrows)
+        except Exception as e:
+            print(f"    WARNING: Failed to load {f}: {e}")
+            continue
+
+        df = _canonicalize_columns(df)
+        if sample_frac is not None and 0 < sample_frac < 1:
+            df = df.sample(frac=sample_frac, random_state=42)
+
+        if max_rows is not None and len(df) > max_rows - total_rows:
+            df = df.iloc[: max_rows - total_rows]
+
+        dfs.append(df)
+        total_rows += len(df)
+        print(f"    ✓ Loaded {len(df)} records (total {total_rows})")
+
+    if not dfs:
+        raise ValueError("No rental data could be loaded from the provided CSV files.")
+
+    print("Concatenating dataframes...")
     combined = pd.concat(dfs, ignore_index=True, sort=False)
     # ensure we have at least a start_time column
     if "start_time" not in combined.columns:
         raise ValueError("Cannot detect start_time column in the provided CSVs. Please inspect files or provide column mapping.")
 
+    print("Sorting by start_time...")
     combined = combined.sort_values("start_time").reset_index(drop=True)
+    print(f"Total records loaded: {len(combined)}")
     return combined
