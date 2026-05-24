@@ -226,41 +226,100 @@ def build_env(
     return env
 
 
+def _load_yaml(path: str | Path) -> dict:
+    """YAML config 로드. 파일 없거나 비어있으면 {} 반환."""
+    p = Path(path)
+    if not p.exists():
+        return {}
+    import yaml
+    with open(p, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _get(cfg: dict, *keys, default=None):
+    """nested dict 안전 접근. _get(cfg, 'truck', 'n_trucks', default=3)."""
+    cur = cfg
+    for k in keys:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(k)
+        if cur is None:
+            return default
+    return cur
+
+
 def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--algo", choices=["dqn", "masked_dqn"], default="dqn",
+
+    # ── Phase 1: --config만 먼저 파싱 → yaml 로드 ──
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config", default=str(PROJECT_ROOT / "config" / "default.yaml"),
+                     help="YAML config 파일 경로 (기본: config/default.yaml)")
+    pre_args, _ = pre.parse_known_args()
+    cfg = _load_yaml(pre_args.config)
+    if cfg:
+        print(f"[config] loaded from {pre_args.config}")
+
+    # ── Phase 2: 본 parser — default를 yaml에서 (CLI 인자로 override 가능) ──
+    parser = argparse.ArgumentParser(parents=[pre])
+    parser.add_argument("--algo", choices=["dqn", "masked_dqn"],
+                        default=_get(cfg, "algorithm", "name", default="dqn"),
                         help="dqn: vanilla, masked_dqn: invalid-action masking (action_masks)")
-    parser.add_argument("--double-q", action="store_true", help="masked_dqn에서 Double DQN 타깃 사용")
+    parser.add_argument("--double-q", action="store_true",
+                        default=_get(cfg, "algorithm", "double_q", default=False),
+                        help="masked_dqn에서 Double DQN 타깃 사용")
     parser.add_argument("--no-action-mask", action="store_true",
                         help="env의 use_action_mask=False (마스킹 효과 비교용)")
-    parser.add_argument("--district", default="마포구")
-    parser.add_argument("--n-trucks", type=int, default=3)
-    parser.add_argument("--timesteps", type=int, default=100_000)
-    parser.add_argument("--eval-freq", type=int, default=5_000)
-    parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--buffer-size", type=int, default=100_000)
-    parser.add_argument("--batch-size", type=int, default=64)
-    parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--exploration-fraction", type=float, default=0.3)
-    parser.add_argument("--exploration-final-eps", type=float, default=0.05)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--tag", default="run1", help="로그 디렉토리 구분")
-    parser.add_argument("--n-train-dates", type=int, default=20, help="train pool 크기")
-    parser.add_argument("--urgent-low", type=float, default=0.0,
-                        help="bikes/capacity ≤ 이 값이면 빈 위급 (트리거). 0=비활성")
-    parser.add_argument("--urgent-high", type=float, default=1.0,
-                        help="bikes/capacity ≥ 이 값이면 가득 위급 (트리거). 1=비활성")
-    parser.add_argument("--urgent-bonus", type=float, default=0.0,
+    parser.add_argument("--district", default=_get(cfg, "district", default="마포구"))
+    parser.add_argument("--n-trucks", type=int,
+                        default=_get(cfg, "truck", "n_trucks", default=3))
+    parser.add_argument("--timesteps", type=int,
+                        default=_get(cfg, "training", "timesteps", default=100_000))
+    parser.add_argument("--eval-freq", type=int,
+                        default=_get(cfg, "training", "eval_freq", default=5_000))
+    parser.add_argument("--lr", type=float,
+                        default=_get(cfg, "dqn", "learning_rate", default=1e-4))
+    parser.add_argument("--buffer-size", type=int,
+                        default=_get(cfg, "dqn", "buffer_size", default=100_000))
+    parser.add_argument("--batch-size", type=int,
+                        default=_get(cfg, "dqn", "batch_size", default=64))
+    parser.add_argument("--gamma", type=float,
+                        default=_get(cfg, "dqn", "gamma", default=0.99))
+    parser.add_argument("--exploration-fraction", type=float,
+                        default=_get(cfg, "dqn", "exploration_fraction", default=0.3))
+    parser.add_argument("--exploration-final-eps", type=float,
+                        default=_get(cfg, "dqn", "exploration_final_eps", default=0.05))
+    parser.add_argument("--seed", type=int,
+                        default=_get(cfg, "training", "seed", default=42))
+    parser.add_argument("--tag", default=_get(cfg, "training", "tag", default="run1"),
+                        help="로그 디렉토리 구분")
+    parser.add_argument("--n-train-dates", type=int,
+                        default=_get(cfg, "training", "n_train_dates", default=20),
+                        help="train pool 크기")
+    parser.add_argument("--urgent-low", type=float,
+                        default=_get(cfg, "env", "urgent_low", default=0.0),
+                        help="bikes/capacity ≤ 이 값이면 빈 위급 (트리거)")
+    parser.add_argument("--urgent-high", type=float,
+                        default=_get(cfg, "env", "urgent_high", default=1.0),
+                        help="bikes/capacity ≥ 이 값이면 가득 위급 (트리거)")
+    parser.add_argument("--urgent-bonus", type=float,
+                        default=_get(cfg, "env", "urgent_bonus", default=0.0),
                         help="위급 정류소 도착 시 보너스 reward (shaping)")
     parser.add_argument("--strict-mask", action="store_true",
+                        default=_get(cfg, "env", "strict_urgent_mask", default=False),
                         help="위급 정류소만 선택 가능하게 마스킹")
-    parser.add_argument("--w-travel-km", type=float, default=-0.01,
+    parser.add_argument("--w-travel-km", type=float,
+                        default=_get(cfg, "reward", "travel_km", default=-0.01),
                         help="이동 거리 보상 가중치 (km당)")
-    parser.add_argument("--w-travel-step", type=float, default=-0.005,
+    parser.add_argument("--w-travel-step", type=float,
+                        default=_get(cfg, "reward", "travel_step", default=-0.005),
                         help="이동 시간 보상 가중치 (step당)")
-    parser.add_argument("--explore-bonus", type=float, default=0.0,
-                        help="방문 빈도 기반 탐색 보너스 스케일 (1/sqrt(n))")
+    parser.add_argument("--explore-bonus", type=float,
+                        default=_get(cfg, "env", "explore_bonus", default=0.0),
+                        help="방문 빈도 기반 탐색 보너스 스케일")
+    parser.add_argument("--eval-shaping", action="store_true",
+                        default=_get(cfg, "evaluation", "shaping", default=False),
+                        help="평가 환경에 shaping 적용. 기본 OFF (공정 metric)")
     args = parser.parse_args()
 
     log_root = PROJECT_ROOT / "logs" / f"{args.algo}_{args.tag}"
@@ -289,12 +348,15 @@ def main() -> None:
     # 휴리스틱 비교 기준
     print(f"\n[2/4] computing heuristic baseline on eval set...")
     t0 = time.time()
+    # 평가 환경: 기본은 shaping 제거 (공정 metric). --eval-shaping이면 학습과 동일.
+    eval_urgent_bonus = args.urgent_bonus if args.eval_shaping else 0.0
+    eval_explore_bonus = args.explore_bonus if args.eval_shaping else 0.0
     heuristic_reward = evaluate_heuristic(
         eval_episodes, n_trucks=args.n_trucks, seed=args.seed,
         urgent_low_ratio=args.urgent_low, urgent_high_ratio=args.urgent_high,
-        urgent_bonus=args.urgent_bonus, strict_urgent_mask=args.strict_mask,
+        urgent_bonus=eval_urgent_bonus, strict_urgent_mask=args.strict_mask,
         w_travel_km=args.w_travel_km, w_travel_step=args.w_travel_step,
-        explore_bonus_scale=args.explore_bonus,
+        explore_bonus_scale=eval_explore_bonus,
     )
     print(f"  most_imbalanced mean reward: {heuristic_reward:.2f}  ({time.time()-t0:.1f}s)")
 
@@ -303,7 +365,7 @@ def main() -> None:
     print(f"  환경 설정: urgent_low={args.urgent_low}, urgent_high={args.urgent_high}, "
           f"urgent_bonus={args.urgent_bonus}, strict_mask={args.strict_mask}, "
           f"w_travel_km={args.w_travel_km}, w_travel_step={args.w_travel_step}")
-    env_kwargs = dict(
+    train_env_kwargs = dict(
         urgent_low_ratio=args.urgent_low,
         urgent_high_ratio=args.urgent_high,
         urgent_bonus=args.urgent_bonus,
@@ -312,14 +374,22 @@ def main() -> None:
         w_travel_step=args.w_travel_step,
         explore_bonus_scale=args.explore_bonus,
     )
+    # 평가는 기본 shaping OFF (순수 metric) — --eval-shaping이면 학습과 동일
+    eval_env_kwargs = {**train_env_kwargs,
+                       "urgent_bonus": eval_urgent_bonus,
+                       "explore_bonus_scale": eval_explore_bonus}
+    print(f"  평가 환경: urgent_bonus={eval_env_kwargs['urgent_bonus']}, "
+          f"explore_bonus={eval_env_kwargs['explore_bonus_scale']} "
+          f"({'shaping OFF — 공정 metric' if not args.eval_shaping else 'shaping ON'})")
+
     train_env = build_env(
         train_episodes, args.n_trucks, seed=args.seed,
         monitor_dir=log_root / "monitor", use_action_mask=use_mask,
-        **env_kwargs,
+        **train_env_kwargs,
     )
     eval_env = build_env(
         eval_episodes, args.n_trucks, seed=args.seed + 1, use_action_mask=use_mask,
-        **env_kwargs,
+        **eval_env_kwargs,
     )
 
     # 모델
