@@ -9,6 +9,9 @@ pandas>=2.0.0
 # 설정
 pyyaml>=6.0
 
+# 공휴일 (한국 공휴일·대체공휴일·임시공휴일)
+holidays>=0.50
+
 # 시각화 / 로깅
 matplotlib>=3.7.0
 tensorboard>=2.14.0

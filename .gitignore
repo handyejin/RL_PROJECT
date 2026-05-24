@@ -27,5 +27,8 @@ data/processed/
 logs/
 *.log
 
+# Generated replay JSONs (학습 후 재생성, 파일 큼)
+docs/replay*.json
+
 # Jupyter
 .ipynb_checkpoints/
