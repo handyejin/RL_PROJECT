@@ -394,32 +394,108 @@ http://localhost:8765/replay_viewer.html
 
 ---
 
-## 8. 현재 권장 설정
+## 8. 현재 권장 설정 — YAML config 사용
+
+### 8.1 가장 단순한 학습 명령
+
+권장 설정은 `config/default.yaml`에 미리 정의돼 있어 명령이 매우 짧음:
 
 ```bash
-python scripts/train.py \
-  --algo masked_dqn --double-q \
-  --urgent-low 0.15 --urgent-high 0.85 \
-  --urgent-bonus 2.0 \
-  --explore-bonus 0.3 \
-  --w-travel-km -0.008 --w-travel-step -0.002 \
-  --exploration-fraction 0.6 --exploration-final-eps 0.15 \
-  --n-train-dates 60 \
-  --tag <태그> --timesteps 1000000
+python scripts/train.py --tag my_experiment
+# → config/default.yaml의 모든 값 자동 사용
 ```
 
-| 인자 | 값 | 이유 |
+### 8.2 일부만 override (ablation 실험)
+
+```bash
+# 학습 길이만 변경
+python scripts/train.py --tag long_run --timesteps 1000000
+
+# strict_mask 켜고 비교
+python scripts/train.py --tag strict --strict-mask
+
+# explore_bonus 빼기
+python scripts/train.py --tag no_explore --explore-bonus 0
+
+# 평가 시 shaping 켜기 (옛 방식 검증용)
+python scripts/train.py --tag with_shaping --eval-shaping
+```
+
+### 8.3 다른 config 파일 사용
+
+```bash
+# 실험별 config 만들고 재사용
+cp config/default.yaml configs/exp_warmup.yaml
+# configs/exp_warmup.yaml 편집
+python scripts/train.py --config configs/exp_warmup.yaml --tag warmup_v1
+```
+
+### 8.4 우선순위
+
+```
+높음 → 낮음
+1. CLI 인자  (예: --timesteps 1000000)
+2. YAML 값   (--config 파일)
+3. argparse default (코드 fallback)
+```
+
+### 8.5 `config/default.yaml` 내용 (현재 권장 — open_v1 기반)
+
+```yaml
+district: "마포구"
+
+truck:
+  n_trucks: 3
+
+reward:
+  travel_km: -0.008
+  travel_step: -0.002
+
+env:
+  urgent_low: 0.15
+  urgent_high: 0.85
+  urgent_bonus: 2.0
+  explore_bonus: 0.3
+  strict_urgent_mask: false
+
+algorithm:
+  name: "masked_dqn"
+  double_q: true
+
+dqn:
+  learning_rate: 0.0001
+  buffer_size: 100000
+  batch_size: 64
+  gamma: 0.99
+  exploration_fraction: 0.6
+  exploration_final_eps: 0.15
+
+training:
+  timesteps: 500000
+  eval_freq: 10000
+  n_train_dates: 60
+  seed: 42
+  tag: "default"
+
+evaluation:
+  shaping: false   # 공정 metric (학습엔 shaping 있지만 평가엔 없음)
+```
+
+### 8.6 각 값의 의미
+
+| YAML 키 | 값 | 이유 |
 |---|---|---|
-| `--algo masked_dqn` | | invalid action 차단 |
-| `--double-q` | | Q 과대추정 완화 |
-| `--urgent-low/high` | 0.15 / 0.85 | SMDP 트리거 임계치 |
-| `--urgent-bonus` | 2.0 | 위급 곳 학습 유도 |
-| ❌ `--strict-mask` | (꺼짐) | 좁은 collapse 회피 |
-| `--explore-bonus` | 0.3 | 다양한 정류소 시도 |
-| `--w-travel-km/step` | -0.008 / -0.002 | 살아있는 이동 비용 |
-| `--exploration-fraction/eps` | 0.6 / 0.15 | 학습 후반에도 탐색 유지 |
-| `--n-train-dates` | 60 | 모든 계절·공휴일 포함 |
-| `--timesteps` | 1M+ | 1년치 학습에는 충분히 길게 |
+| `algorithm.name: masked_dqn` | | invalid action 차단 |
+| `algorithm.double_q: true` | | Q 과대추정 완화 |
+| `env.urgent_low/high` | 0.15 / 0.85 | SMDP 트리거 임계치 |
+| `env.urgent_bonus` | 2.0 | 위급 곳 학습 유도 |
+| `env.strict_urgent_mask: false` | | 좁은 collapse 회피 (역효과 발견) |
+| `env.explore_bonus` | 0.3 | 다양한 정류소 시도 |
+| `reward.travel_km/step` | -0.008 / -0.002 | 살아있는 이동 비용 |
+| `dqn.exploration_fraction/eps` | 0.6 / 0.15 | 학습 후반에도 탐색 유지 |
+| `training.n_train_dates` | 60 | 모든 계절·공휴일 포함 |
+| `training.timesteps` | 500000 | 1년치 학습 적정 (더 길게 가능) |
+| `evaluation.shaping: false` | | 평가는 공정 metric (shaping 제거) |
 
 ---
 

@@ -341,42 +341,79 @@ return EpisodeData(
 
 → **한 episode당 약 425KB**. 60일 + 7일 = 67개 × 425KB ≈ **메모리 약 30MB**.
 
-### 8.3 train.py 4단계
+### 8.3 train.py 흐름 — YAML config 자동 로드
+
+train.py는 시작 시 **`config/default.yaml`을 자동 로드** → 모든 인자의 default가 yaml에서 옴. CLI는 일부 override용으로 짧게.
+
+#### [0/4] YAML 로드 (학습 시작 직후)
+
+```python
+# scripts/train.py
+# --config만 먼저 파싱 → yaml 로드
+pre.add_argument("--config", default="config/default.yaml")
+cfg = yaml.safe_load(open(args.config))
+
+# 본 parser의 default를 yaml에서 가져옴 (CLI 인자가 우선)
+parser.add_argument("--n-trucks", default=cfg["truck"]["n_trucks"])     # 3
+parser.add_argument("--urgent-bonus", default=cfg["env"]["urgent_bonus"])  # 2.0
+parser.add_argument("--timesteps", default=cfg["training"]["timesteps"])    # 500000
+# ... 모든 인자 yaml에서 ...
+```
 
 #### [1/4] 60일 + 7일 episodes 로드 (학습 시작 시 1회)
 
 ```python
-# scripts/train.py
-train_dates = TRAIN_DATES[: args.n_train_dates]   # 60일 random sample
+train_dates = TRAIN_DATES[: args.n_train_dates]   # yaml의 60일
 train_episodes = [
-    load_episode("data/processed", district="마포구", episode_start=f"{d} 00:00")
+    load_episode("data/processed", district=args.district, episode_start=f"{d} 00:00")
     for d in train_dates
 ]
 eval_episodes = [load_episode(...) for d in EVAL_DATES]   # 7일 (학습 분리)
 ```
 
-#### [2/4] 휴리스틱 baseline 측정
+#### [2/4] 휴리스틱 baseline 측정 (공정 metric)
 
 ```python
-heuristic_reward = evaluate_heuristic(eval_episodes, ...)
-# eval set 7일에 most_imbalanced 정책으로 미리 돌려 평균 reward 계산
-# → 학습 중 비교 기준선으로 사용
+# 평가는 shaping OFF (yaml의 evaluation.shaping: false)
+eval_urgent_bonus = args.urgent_bonus if args.eval_shaping else 0.0
+eval_explore_bonus = args.explore_bonus if args.eval_shaping else 0.0
+
+heuristic_reward = evaluate_heuristic(eval_episodes, ...,
+    urgent_bonus=eval_urgent_bonus, explore_bonus_scale=eval_explore_bonus)
+# → 휴리스틱이 받는 reward도 공정 metric (학습 중 비교 기준)
 ```
 
 #### [3/4] 환경 구성 + DQN 학습
 
 ```python
-train_env = build_env(train_episodes, ...)   # episode 60개 리스트로 주입
-eval_env  = build_env(eval_episodes, ...)    # episode 7개
+# train_env: shaping 적용 (학습용)
+train_env = build_env(train_episodes, urgent_bonus=2.0, explore_bonus=0.3, ...)
 
-model = MaskableDQN("MlpPolicy", train_env, ...)
-model.learn(total_timesteps=2_000_000, callback=eval_callback)
+# eval_env: shaping 제거 (공정 metric)
+eval_env  = build_env(eval_episodes, urgent_bonus=0.0, explore_bonus=0.0, ...)
+
+model = MaskableDQN("MlpPolicy", train_env, **dqn_kwargs)
+model.learn(total_timesteps=args.timesteps, callback=eval_callback)
 ```
 
 #### [4/4] 모델 저장
+
 ```python
-model.save(log_root / "masked_dqn_final.zip")
+model.save(log_root / f"{args.algo}_final.zip")
 np.save(log_root / "history.npy", history)
+```
+
+#### 사용자 입장에서 — 명령은 짧게
+
+```bash
+# 기본 (yaml의 모든 값 사용)
+python scripts/train.py --tag my_experiment
+
+# 일부 override
+python scripts/train.py --tag long_run --timesteps 1000000
+
+# 다른 yaml 사용
+python scripts/train.py --config configs/exp.yaml --tag exp1
 ```
 
 ### 8.4 환경 내부 — 60개 episode 무작위 회전
@@ -502,9 +539,14 @@ trips 파일이 매우 클 경우 `pd.read_csv(file, chunksize=...)`로 chunk별
 
 ## 10. 관련 코드 / 문서
 
+### 핵심 파일
 - **`src/data/preprocess.py`** — 전처리 핵심 모듈
-- **`scripts/run_preprocess.py`** — CLI 진입점
+- **`scripts/run_preprocess.py`** — 전처리 CLI 진입점
 - **`src/envs/data_loader.py`** — 전처리 결과 → 환경 입력 (EpisodeData) 변환
+- **`config/default.yaml`** — 환경·보상·DQN 통합 설정 (학습 시 자동 로드)
+- **`scripts/train.py`** — 학습 진입점 (yaml + CLI override)
+
+### 문서
 - **`docs/source_guide.html`** — 함수별 상세 가이드 (인터랙티브)
-- **`docs/experiments.md`** — 학습 실험 로그
+- **`docs/experiments.md`** — 학습 실험 로그 + 권장 설정
 - **`README.md`** — 프로젝트 전체 흐름
