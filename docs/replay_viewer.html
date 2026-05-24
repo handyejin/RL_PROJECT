@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DQN Replay Viewer — 따릉이 재배치</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #273449;
+    --accent: #38bdf8;
+    --accent-2: #fbbf24;
+    --good: #4ade80;
+    --bad: #f87171;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --border: #334155;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 14px; background: var(--bg); color: var(--text);
+         font-family: -apple-system, "Pretendard", "Apple SD Gothic Neo", sans-serif;
+         font-size: 13px; }
+  h1 { font-size: 18px; margin: 0 0 12px 0; color: var(--accent); }
+  h2 { font-size: 12px; margin: 0 0 8px 0; color: var(--accent-2); text-transform: uppercase; letter-spacing: 0.8px; }
+  h3 { font-size: 11px; margin: 0 0 6px 0; color: var(--text-dim); font-weight: 600; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    grid-template-rows: auto 1fr auto;
+    gap: 10px;
+    min-height: calc(100vh - 50px);
+  }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+
+  /* status bar */
+  .panel-full { grid-column: 1 / -1; }
+  .stats-row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .stat { background: var(--panel-2); padding: 6px 10px; border-radius: 4px; min-width: 80px; }
+  .stat .label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; }
+  .stat .value { font-size: 15px; font-weight: 700; font-family: "SF Mono", monospace; margin-top: 1px; }
+  .stat .value.bad { color: var(--bad); }
+  .stat .value.good { color: var(--good); }
+  .stat .value.accent { color: var(--accent); }
+
+  /* map */
+  .map-panel { display: flex; flex-direction: column; }
+  .map-svg { flex: 1; min-height: 400px; background: #0a1224; border-radius: 6px; }
+  .station-circle { transition: fill 0.3s; cursor: pointer; }
+  .station-circle:hover { stroke: white; stroke-width: 2; }
+  .truck-circle { transition: cx var(--anim-dur, 0.8s) cubic-bezier(0.4, 0, 0.2, 1), cy var(--anim-dur, 0.8s) cubic-bezier(0.4, 0, 0.2, 1);
+                  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6)); }
+  .truck-line { transition: x1 var(--anim-dur, 0.8s), y1 var(--anim-dur, 0.8s), x2 var(--anim-dur, 0.8s), y2 var(--anim-dur, 0.8s); }
+
+  /* sidebar */
+  .side { display: flex; flex-direction: column; gap: 10px; }
+  .info-row { font-family: "SF Mono", monospace; font-size: 11px; line-height: 1.6; }
+  .info-row .k { color: var(--text-dim); }
+  .info-row .v { color: var(--text); }
+  .q-bar-container { display: flex; flex-direction: column; gap: 2px; max-height: 200px; overflow-y: auto; }
+  .q-bar-row { display: flex; align-items: center; gap: 6px; font-size: 10px; font-family: monospace; }
+  .q-bar-row .qname { width: 60px; color: var(--text-dim); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .q-bar-row .qbar-wrap { flex: 1; height: 10px; background: var(--bg); border-radius: 2px; position: relative; overflow: hidden; }
+  .q-bar-row .qbar { position: absolute; top: 0; bottom: 0; background: var(--accent); }
+  .q-bar-row.best .qbar { background: var(--accent-2); }
+  .q-bar-row.masked { opacity: 0.3; }
+  .q-bar-row.chosen .qname { color: var(--accent-2); font-weight: 700; }
+  .q-bar-row .qval { width: 40px; text-align: right; color: var(--text); }
+
+  /* reward curve */
+  .curve-svg { width: 100%; height: 90px; background: #0a1224; border-radius: 4px; }
+
+  /* controls */
+  .controls-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  button.ctrl {
+    background: var(--accent); color: var(--bg); border: none;
+    padding: 6px 12px; border-radius: 4px; font-weight: 700; cursor: pointer; font-family: inherit;
+    font-size: 12px;
+  }
+  button.ctrl:hover { background: #0ea5e9; }
+  button.ctrl.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  button.ctrl.secondary:hover { background: var(--border); }
+  input[type="range"] { flex: 1; min-width: 200px; }
+  .speed-mini input { width: 120px; }
+  .file-input { display: none; }
+  label.file-label { background: var(--good); color: var(--bg); padding: 6px 12px; border-radius: 4px; font-weight: 700; cursor: pointer; font-size: 12px; }
+  label.file-label:hover { background: #22c55e; }
+
+  /* log */
+  .log { height: 140px; overflow-y: auto; font-family: "SF Mono", monospace; font-size: 10px;
+         background: var(--bg); border-radius: 4px; padding: 6px; line-height: 1.5; }
+  .log .ts { color: var(--text-dim); }
+  .log .action { color: var(--accent); }
+  .log .reward { color: var(--accent-2); }
+  .log .bad { color: var(--bad); }
+  .log .good { color: var(--good); }
+
+  .truck-legend { display: flex; gap: 10px; font-size: 11px; }
+  .truck-legend > div { display: flex; align-items: center; gap: 4px; }
+  .truck-dot { width: 14px; height: 14px; border-radius: 50%; }
+</style>
+</head>
+<body>
+
+<h1>🎬 DQN Replay Viewer</h1>
+
+<div class="grid">
+
+  <!-- ───── Row 1: Stats + Meta ───── -->
+  <div class="panel panel-full">
+    <div class="stats-row" id="stats-row">
+      <div class="stat"><div class="label">district</div><div class="value accent" id="m-district">-</div></div>
+      <div class="stat"><div class="label">date</div><div class="value accent" id="m-date">-</div></div>
+      <div class="stat"><div class="label">algo</div><div class="value" id="m-algo">-</div></div>
+      <div class="stat"><div class="label">n_stations</div><div class="value" id="m-nstations">-</div></div>
+      <div class="stat"><div class="label">총 RL step</div><div class="value good" id="m-rlsteps">-</div></div>
+      <div class="stat"><div class="label">최종 reward</div><div class="value bad" id="m-totalreward">-</div></div>
+      <div class="stat"><div class="label">최종 stockout</div><div class="value bad" id="m-stockout">-</div></div>
+      <div class="stat"><div class="label">최종 full</div><div class="value bad" id="m-full">-</div></div>
+      <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
+        <select id="quick-select" style="background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 6px 8px; border-radius: 6px; font-family: inherit; font-size: 12px;">
+          <option value="">━ 빠른 전환 (year_v2 eval set) ━</option>
+          <option value="replay_v7_2025-03-25.json">2025-03-25 (봄 화, reward -445)</option>
+          <option value="replay_v7_2025-04-18.json">2025-04-18 (봄 금, reward -591)</option>
+          <option value="replay_v7_2025-05-17.json">2025-05-17 (봄 토, reward -339)</option>
+          <option value="replay_v7_2025-07-01.json">2025-07-01 (여름 화, reward -242)</option>
+          <option value="replay_v7_2025-07-06.json">2025-07-06 (여름 일, reward -167) ⭐</option>
+          <option value="replay_v7_2025-07-09.json">2025-07-09 (여름 수, reward -455)</option>
+          <option value="replay_v7_2025-08-21.json">2025-08-21 (여름 목, reward -496)</option>
+          <option value="replay.json">━ default (1/15) ━</option>
+        </select>
+        <label class="file-label" for="file-input">📁 다른 JSON 로드</label>
+        <input id="file-input" class="file-input" type="file" accept=".json" />
+      </div>
+    </div>
+  </div>
+
+  <!-- ───── Row 2 Left: Map ───── -->
+  <div class="panel map-panel">
+    <h2>지도 (마포구) — 정류소 색 = 자전거 비율, ★ = 결정 차례 트럭</h2>
+    <div class="truck-legend" style="margin-bottom: 6px;">
+      <div><div class="truck-dot" style="background:#3b82f6"></div> 트럭 0</div>
+      <div><div class="truck-dot" style="background:#a855f7"></div> 트럭 1</div>
+      <div><div class="truck-dot" style="background:#ec4899"></div> 트럭 2</div>
+      <div style="margin-left: 20px; color: var(--text-dim);">
+        <span style="color: var(--bad);">●</span> 빈 정류소
+        <span style="color: var(--good);">●</span> 적정
+        <span style="color: var(--accent-2);">●</span> 가득
+      </div>
+    </div>
+    <svg class="map-svg" id="map-svg" viewBox="0 0 800 500" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+
+  <!-- ───── Row 2 Right: Side info ───── -->
+  <div class="side">
+    <div class="panel">
+      <h2>현재 시점 정보</h2>
+      <div class="info-row">
+        <div><span class="k">RL step:</span> <span class="v" id="info-rlstep">-</span> / <span id="info-rlmax">-</span></div>
+        <div><span class="k">시뮬 시각:</span> <span class="v" id="info-time">-</span></div>
+        <div><span class="k">결정 차례:</span> <span class="v" id="info-curtruck">-</span></div>
+        <div><span class="k">선택 action:</span> <span class="v" id="info-action">-</span></div>
+        <div><span class="k">step reward:</span> <span class="v" id="info-reward">-</span></div>
+        <div><span class="k">누적 reward:</span> <span class="v" id="info-cumreward">-</span></div>
+        <div><span class="k">누적 stockout / full:</span> <span class="v" id="info-cumsf">-</span></div>
+        <div><span class="k">누적 이동 km:</span> <span class="v" id="info-cumkm">-</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>트럭 상태</h2>
+      <div class="info-row" id="trucks-info"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Q-values (선택 가능한 정류소 상위 8개)</h2>
+      <div class="q-bar-container" id="q-bars"></div>
+    </div>
+  </div>
+
+  <!-- ───── Row 3: Controls + Log + Reward Curve ───── -->
+  <div class="panel">
+    <h2>컨트롤</h2>
+    <div class="controls-row">
+      <button class="ctrl" id="btn-play">▶ Play</button>
+      <button class="ctrl secondary" id="btn-prev">⏮ -1</button>
+      <button class="ctrl secondary" id="btn-next">+1 ⏭</button>
+      <button class="ctrl secondary" id="btn-reset">↻ Reset</button>
+    </div>
+    <div class="controls-row" style="margin-top: 8px;">
+      <span style="font-size: 11px; color: var(--text-dim);">step</span>
+      <input type="range" id="step-slider" min="0" max="100" value="0" />
+      <span class="speed-mini" style="display: flex; gap: 4px; align-items: center;">
+        <span style="font-size: 11px; color: var(--text-dim);">step 간격</span>
+        <input type="range" id="speed" min="100" max="3000" value="800" step="50" />
+        <span id="speed-val" style="font-size: 10px; font-family: monospace; min-width: 50px;">800ms</span>
+      </span>
+    </div>
+    <h2 style="margin-top: 10px;">reward 곡선 (전체 episode)</h2>
+    <svg class="curve-svg" id="reward-curve" viewBox="0 0 800 100" preserveAspectRatio="none"></svg>
+  </div>
+
+  <div class="panel">
+    <h2>이벤트 로그</h2>
+    <div class="log" id="log"></div>
+  </div>
+
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+const TRUCK_COLORS = ["#3b82f6", "#a855f7", "#ec4899"];
+const STATION_CAPACITY = 20;
+
+let data = null;
+let curIdx = 0;
+let playing = false;
+
+// 지도 좌표 변환
+let coordsToXY = null; // (lat, lon) → (x, y) in SVG space
+
+function setupMap(coords) {
+  const lats = coords.map(c => c[0]);
+  const lons = coords.map(c => c[1]);
+  const latMin = Math.min(...lats), latMax = Math.max(...lats);
+  const lonMin = Math.min(...lons), lonMax = Math.max(...lons);
+  const padX = 30, padY = 30;
+  const w = 800, h = 500;
+  return ([lat, lon]) => {
+    const x = padX + ((lon - lonMin) / (lonMax - lonMin)) * (w - 2*padX);
+    const y = padY + ((latMax - lat) / (latMax - latMin)) * (h - 2*padY); // y 뒤집기
+    return [x, y];
+  };
+}
+
+function fmtTime(t) {
+  const totalMin = t * 10;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
+function bikeColor(bikes, cap) {
+  const ratio = bikes / cap;
+  if (ratio <= 0.15) return "#ef4444"; // 빈
+  if (ratio >= 0.85) return "#fbbf24"; // 가득
+  // 중간: 초록 ~ 노랑 그라데이션 (정상에 가까울수록 진한 초록)
+  return "#4ade80";
+}
+
+function loadData(json) {
+  data = json;
+  curIdx = 0;
+  coordsToXY = setupMap(data.meta.station_coords);
+  document.getElementById("m-district").textContent = data.meta.district;
+  document.getElementById("m-date").textContent = data.meta.date;
+  document.getElementById("m-algo").textContent = data.meta.algo;
+  document.getElementById("m-nstations").textContent = data.meta.n_stations;
+  document.getElementById("m-rlsteps").textContent = data.meta.rl_steps;
+  document.getElementById("m-totalreward").textContent = data.meta.total_reward.toFixed(2);
+  document.getElementById("m-stockout").textContent = data.meta.total_stockout;
+  document.getElementById("m-full").textContent = data.meta.total_full;
+
+  document.getElementById("step-slider").max = data.snapshots.length - 1;
+  document.getElementById("info-rlmax").textContent = data.snapshots.length - 1;
+
+  drawStaticMap();
+  drawRewardCurve();
+  render();
+  appendLog(`📂 loaded: ${data.meta.district} ${data.meta.date} | ${data.meta.rl_steps} steps`);
+}
+
+// ════════════════════════════════════════════════════════════════
+// 지도: 정류소(static) + 트럭(dynamic)
+function drawStaticMap() {
+  const svg = document.getElementById("map-svg");
+  svg.innerHTML = "";
+
+  // 정류소
+  const stationGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  stationGroup.id = "stations-group";
+  for (let i = 0; i < data.meta.n_stations; i++) {
+    const [x, y] = coordsToXY(data.meta.station_coords[i]);
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", x);
+    c.setAttribute("cy", y);
+    c.setAttribute("r", 4);
+    c.setAttribute("class", "station-circle");
+    c.setAttribute("id", `station-${i}`);
+    c.setAttribute("fill", "#475569");
+    c.setAttribute("stroke", "#0f172a");
+    c.setAttribute("stroke-width", "1");
+    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    title.textContent = `${data.meta.station_ids[i]}`;
+    c.appendChild(title);
+    stationGroup.appendChild(c);
+  }
+  svg.appendChild(stationGroup);
+
+  // 트럭 이동 경로 (line, 트럭별)
+  for (let i = 0; i < data.meta.n_trucks; i++) {
+    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+    line.setAttribute("class", "truck-line");
+    line.setAttribute("id", `truck-line-${i}`);
+    line.setAttribute("stroke", TRUCK_COLORS[i]);
+    line.setAttribute("stroke-width", "2");
+    line.setAttribute("stroke-dasharray", "4 3");
+    line.setAttribute("opacity", "0.5");
+    svg.appendChild(line);
+  }
+
+  // 트럭 (circle)
+  for (let i = 0; i < data.meta.n_trucks; i++) {
+    const tg = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    tg.setAttribute("id", `truck-g-${i}`);
+
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("class", "truck-circle");
+    c.setAttribute("id", `truck-${i}`);
+    c.setAttribute("r", 11);
+    c.setAttribute("fill", TRUCK_COLORS[i]);
+    c.setAttribute("stroke", "white");
+    c.setAttribute("stroke-width", "2");
+    tg.appendChild(c);
+
+    const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    txt.setAttribute("id", `truck-label-${i}`);
+    txt.setAttribute("text-anchor", "middle");
+    txt.setAttribute("dy", "4");
+    txt.setAttribute("fill", "white");
+    txt.setAttribute("font-size", "11");
+    txt.setAttribute("font-weight", "700");
+    txt.setAttribute("style", "pointer-events: none");
+    txt.textContent = i;
+    tg.appendChild(txt);
+
+    svg.appendChild(tg);
+  }
+}
+
+function render() {
+  if (!data) return;
+  const snap = data.snapshots[curIdx];
+  const cap = data.meta.station_capacity;
+  const n = data.meta.n_stations;
+
+  // 정류소 색깔 업데이트
+  for (let i = 0; i < n; i++) {
+    const el = document.getElementById(`station-${i}`);
+    el.setAttribute("fill", bikeColor(snap.bikes[i], cap));
+    // 자전거 비율에 따라 반지름 살짝 변경
+    const r = 3 + (snap.bikes[i] / cap) * 4;
+    el.setAttribute("r", r);
+  }
+
+  // 트럭 위치
+  for (let i = 0; i < data.meta.n_trucks; i++) {
+    const tr = snap.trucks[i];
+    let xy;
+    if (tr.remaining === 0 || tr.total_steps === 0) {
+      xy = coordsToXY(data.meta.station_coords[tr.loc]);
+    } else {
+      // origin → dest 보간. origin은 loc (이동 중 loc는 변하지 않음)
+      const origin = data.meta.station_coords[tr.loc];
+      const dest = data.meta.station_coords[tr.dest];
+      const progress = (tr.total_steps - tr.remaining) / tr.total_steps;
+      const lat = origin[0] + (dest[0] - origin[0]) * progress;
+      const lon = origin[1] + (dest[1] - origin[1]) * progress;
+      xy = coordsToXY([lat, lon]);
+    }
+
+    const tg = document.getElementById(`truck-g-${i}`);
+    const c = document.getElementById(`truck-${i}`);
+    const txt = document.getElementById(`truck-label-${i}`);
+    const line = document.getElementById(`truck-line-${i}`);
+
+    c.setAttribute("cx", xy[0]);
+    c.setAttribute("cy", xy[1]);
+    txt.setAttribute("x", xy[0]);
+    txt.setAttribute("y", xy[1]);
+
+    // 결정 차례 표시 (외곽선 강조)
+    if (i === snap.current_truck && tr.remaining === 0) {
+      c.setAttribute("r", 14);
+      c.setAttribute("stroke", "#38bdf8");
+      c.setAttribute("stroke-width", "3");
+    } else {
+      c.setAttribute("r", 11);
+      c.setAttribute("stroke", "white");
+      c.setAttribute("stroke-width", "2");
+    }
+
+    // 이동 경로 라인
+    if (tr.remaining > 0) {
+      const originXY = coordsToXY(data.meta.station_coords[tr.loc]);
+      const destXY = coordsToXY(data.meta.station_coords[tr.dest]);
+      line.setAttribute("x1", originXY[0]);
+      line.setAttribute("y1", originXY[1]);
+      line.setAttribute("x2", destXY[0]);
+      line.setAttribute("y2", destXY[1]);
+      line.setAttribute("opacity", "0.5");
+    } else {
+      line.setAttribute("opacity", "0");
+    }
+  }
+
+  // info panel
+  document.getElementById("info-rlstep").textContent = snap.rl_step;
+  document.getElementById("info-time").textContent = fmtTime(snap.t);
+  document.getElementById("info-curtruck").textContent = `트럭 ${snap.current_truck}`;
+  document.getElementById("info-action").textContent =
+    snap.action !== null && snap.action !== undefined
+      ? `${snap.action_name || snap.action} (action=${snap.action})` + (snap.actor_truck !== undefined ? ` ← 트럭${snap.actor_truck}` : "")
+      : "(init)";
+  document.getElementById("info-reward").textContent = snap.reward !== undefined ? snap.reward.toFixed(3) : "-";
+  document.getElementById("info-cumreward").textContent = snap.cum_reward.toFixed(2);
+  document.getElementById("info-cumsf").textContent = `${snap.cum_stockout} / ${snap.cum_full}`;
+  document.getElementById("info-cumkm").textContent = snap.cum_km.toFixed(1) + " km";
+
+  // 트럭 정보 패널
+  const trEl = document.getElementById("trucks-info");
+  trEl.innerHTML = snap.trucks.map((tr, i) => {
+    const isCur = i === snap.current_truck && tr.remaining === 0;
+    const locName = data.meta.station_ids[tr.loc];
+    const destName = data.meta.station_ids[tr.dest];
+    const statusStr = tr.remaining === 0
+      ? `<span class="v" style="color: var(--good)">● idle</span> @ ${locName}`
+      : `<span class="v" style="color: var(--accent-2)">→ busy</span> ${locName} → ${destName} (${tr.remaining}/${tr.total_steps} step)`;
+    return `<div>${isCur ? "★ " : "  "}<span style="color:${TRUCK_COLORS[i]}">트럭${i}</span>: ${statusStr}, load=${tr.load}</div>`;
+  }).join("");
+
+  // Q-values
+  const qEl = document.getElementById("q-bars");
+  qEl.innerHTML = "";
+  if (snap.q_values) {
+    const mask = snap.mask || Array(n).fill(true);
+    const indexed = snap.q_values.map((q, i) => ({ q, i, masked: !mask[i] }));
+    const validQs = indexed.filter(x => !x.masked).map(x => x.q);
+    const qmin = Math.min(...validQs), qmax = Math.max(...validQs);
+    const bestQ = qmax;
+    // 상위 8개만
+    const top = [...indexed].sort((a, b) => b.q - a.q).slice(0, 8);
+    top.forEach(({ q, i, masked }) => {
+      const ratio = qmax !== qmin ? ((q - qmin) / (qmax - qmin)) * 100 : 50;
+      const isBest = q === bestQ && !masked;
+      const isChosen = i === snap.action;
+      qEl.innerHTML += `
+        <div class="q-bar-row ${isBest ? 'best' : ''} ${masked ? 'masked' : ''} ${isChosen ? 'chosen' : ''}">
+          <span class="qname">${data.meta.station_ids[i].substring(0, 8)}</span>
+          <span class="qbar-wrap"><span class="qbar" style="width:${ratio}%"></span></span>
+          <span class="qval">${q.toFixed(2)}</span>
+        </div>`;
+    });
+  } else {
+    qEl.innerHTML = `<div style="color: var(--text-dim); font-size: 11px;">Q-values 없음 (--no-q 옵션으로 export됨)</div>`;
+  }
+
+  // slider
+  document.getElementById("step-slider").value = curIdx;
+
+  // reward curve marker
+  drawRewardCurve(curIdx);
+}
+
+// ════════════════════════════════════════════════════════════════
+// reward 곡선
+function drawRewardCurve(highlight = -1) {
+  const svg = document.getElementById("reward-curve");
+  svg.innerHTML = "";
+  if (!data) return;
+  const snaps = data.snapshots;
+  const W = 800, H = 100;
+  const cums = snaps.map(s => s.cum_reward);
+  const mn = Math.min(0, ...cums);
+  const mx = Math.max(0, ...cums);
+  const xs = i => (i / (snaps.length - 1)) * W;
+  const ys = v => H - ((v - mn) / (mx - mn || 1)) * H;
+
+  // 0 라인
+  const zeroY = ys(0);
+  svg.innerHTML += `<line x1="0" y1="${zeroY}" x2="${W}" y2="${zeroY}" stroke="#334155" stroke-dasharray="2 2" />`;
+
+  // path
+  let path = "";
+  snaps.forEach((s, i) => {
+    path += (i === 0 ? "M" : "L") + xs(i) + "," + ys(s.cum_reward) + " ";
+  });
+  svg.innerHTML += `<path d="${path}" fill="none" stroke="#38bdf8" stroke-width="1.5" />`;
+
+  // 현재 위치 marker
+  if (highlight >= 0) {
+    const x = xs(highlight);
+    const y = ys(snaps[highlight].cum_reward);
+    svg.innerHTML += `<line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="#fbbf24" stroke-width="1" />`;
+    svg.innerHTML += `<circle cx="${x}" cy="${y}" r="4" fill="#fbbf24" />`;
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// 컨트롤
+function step(delta) {
+  if (!data) return;
+  const old = curIdx;
+  curIdx = Math.max(0, Math.min(data.snapshots.length - 1, curIdx + delta));
+  if (delta > 0 && old !== curIdx) {
+    const snap = data.snapshots[curIdx];
+    if (snap.action !== null && snap.action !== undefined) {
+      const stCls = snap.reward < -0.5 ? "bad" : (snap.reward === 0 ? "" : "");
+      appendLog(`<span class="ts">t=${snap.t}</span> 트럭${snap.actor_truck ?? "?"} → ${(snap.action_name || "").substring(0,10)} <span class="reward">r=${snap.reward.toFixed(2)}</span> (cum_so=${snap.cum_stockout}, cum_f=${snap.cum_full})`);
+    }
+  }
+  render();
+}
+
+document.getElementById("btn-play").onclick = () => {
+  playing = !playing;
+  document.getElementById("btn-play").textContent = playing ? "⏸ Pause" : "▶ Play";
+  if (playing) playLoop();
+};
+async function playLoop() {
+  while (playing && data && curIdx < data.snapshots.length - 1) {
+    step(1);
+    const spd = parseInt(document.getElementById("speed").value);
+    await new Promise(r => setTimeout(r, spd));
+  }
+  playing = false;
+  document.getElementById("btn-play").textContent = "▶ Play";
+}
+document.getElementById("btn-next").onclick = () => step(1);
+document.getElementById("btn-prev").onclick = () => step(-1);
+document.getElementById("btn-reset").onclick = () => { curIdx = 0; render(); appendLog("↻ reset"); };
+
+document.getElementById("step-slider").oninput = e => {
+  curIdx = parseInt(e.target.value);
+  render();
+};
+document.getElementById("speed").oninput = e => {
+  const v = parseInt(e.target.value);
+  document.getElementById("speed-val").textContent = v + "ms";
+  // 트럭 애니메이션은 step 간격의 70% 정도가 자연스러움 (다음 step 전에 도착)
+  const animSec = Math.min(v * 0.7 / 1000, 1.5);
+  document.documentElement.style.setProperty("--anim-dur", animSec + "s");
+};
+// 초기 1회 적용
+document.getElementById("speed").dispatchEvent(new Event("input"));
+
+document.getElementById("file-input").onchange = async e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  loadData(JSON.parse(text));
+};
+
+document.getElementById("quick-select").onchange = async e => {
+  const url = e.target.value;
+  if (!url) return;
+  appendLog(`📥 fetching ${url}...`);
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(r.status);
+    loadData(await r.json());
+  } catch (err) {
+    appendLog(`<span class="bad">⚠ fetch 실패: ${err}</span>`);
+  }
+};
+
+function appendLog(html) {
+  const el = document.getElementById("log");
+  const line = document.createElement("div");
+  line.innerHTML = html;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+// ════════════════════════════════════════════════════════════════
+// 자동 로드 (replay.json 같은 폴더에 있을 때)
+fetch("replay.json")
+  .then(r => r.ok ? r.json() : Promise.reject("no replay.json"))
+  .then(loadData)
+  .catch(err => {
+    appendLog(`<span class="bad">⚠ replay.json 자동 로드 실패: ${err}</span>`);
+    appendLog(`<span class="ts">→ '📁 다른 JSON 로드' 버튼으로 수동 선택하세요.</span>`);
+  });
+</script>
+</body>
+</html>

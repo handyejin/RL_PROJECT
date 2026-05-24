@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>따릉이 RebalanceEnv + DQN 훈련 흐름</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #273449;
+    --accent: #38bdf8;
+    --accent-2: #fbbf24;
+    --good: #4ade80;
+    --bad: #f87171;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --border: #334155;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, "Pretendard", "Apple SD Gothic Neo", sans-serif; }
+  body { padding: 18px; min-height: 100vh; }
+  h1 { font-size: 18px; margin: 0 0 14px 0; color: var(--accent); }
+  h2 { font-size: 13px; margin: 0 0 8px 0; color: var(--accent-2); letter-spacing: 0.5px; }
+  h3 { font-size: 12px; margin: 0 0 6px 0; color: var(--text-dim); font-weight: 600; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr;
+    grid-template-rows: auto auto auto;
+    gap: 12px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .panel-full { grid-column: 1 / -1; }
+
+  /* ── 상단 status ─────────────────────────── */
+  .status-row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .stat {
+    background: var(--panel-2);
+    padding: 8px 12px;
+    border-radius: 6px;
+    min-width: 90px;
+  }
+  .stat .label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat .value { font-size: 18px; font-weight: 700; margin-top: 2px; font-family: "SF Mono", Menlo, monospace; }
+  .stat .value.bad { color: var(--bad); }
+  .stat .value.good { color: var(--good); }
+  .stat .value.accent { color: var(--accent); }
+
+  /* ── 정류소 ──────────────────────────── */
+  .stations-wrap {
+    position: relative;
+    padding-top: 50px; /* 트럭 오버레이 공간 */
+  }
+  .road-line {
+    position: absolute;
+    top: 24px;
+    left: 2.5%;
+    right: 2.5%;
+    height: 4px;
+    background: repeating-linear-gradient(
+      90deg,
+      var(--border) 0 12px,
+      transparent 12px 20px
+    );
+    border-radius: 2px;
+    z-index: 1;
+  }
+  .road-stop {
+    position: absolute;
+    top: 18px;
+    width: 16px; height: 16px;
+    background: var(--panel-2);
+    border: 2px solid var(--border);
+    border-radius: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+  }
+  .trucks-overlay {
+    position: absolute;
+    top: 0;
+    left: 0; right: 0;
+    height: 50px;
+    pointer-events: none;
+    z-index: 3;
+  }
+  .moving-truck {
+    position: absolute;
+    top: 6px;
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; color: white; font-size: 14px;
+    transform: translateX(-50%);
+    transition: left 0.5s cubic-bezier(0.4, 0.0, 0.2, 1);
+    box-shadow: 0 3px 10px rgba(0,0,0,0.6);
+    border: 2px solid white;
+  }
+  .moving-truck.busy::after {
+    content: "";
+    position: absolute;
+    top: -3px; left: -3px; right: -3px; bottom: -3px;
+    border-radius: 50%;
+    border: 2px solid var(--accent-2);
+    animation: pulse-ring 1.2s ease-out infinite;
+    opacity: 0;
+  }
+  .moving-truck.current {
+    box-shadow: 0 0 0 3px var(--accent), 0 3px 10px rgba(0,0,0,0.6);
+    transform: translateX(-50%) scale(1.15);
+  }
+  .moving-truck .load-label {
+    position: absolute; top: 38px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    background: var(--panel);
+    color: var(--text);
+    padding: 1px 5px;
+    border-radius: 3px;
+    white-space: nowrap;
+    font-weight: 600;
+    border: 1px solid var(--border);
+  }
+  .moving-truck .progress-label {
+    position: absolute; top: -16px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 9px;
+    color: var(--accent-2);
+    white-space: nowrap;
+    font-family: "SF Mono", monospace;
+  }
+  @keyframes pulse-ring {
+    0% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(1.6); opacity: 0; }
+  }
+  .stations {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+    position: relative;
+    z-index: 2;
+  }
+  .station {
+    background: var(--panel-2);
+    border-radius: 6px;
+    padding: 10px;
+    border: 2px solid transparent;
+    transition: border-color 0.2s;
+    position: relative;
+  }
+  .station.has-truck { border-color: var(--accent); }
+  .station .name { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+  .station .bikes { font-size: 11px; color: var(--text-dim); font-family: "SF Mono", monospace; margin-bottom: 4px; }
+  .station .bar-wrap { height: 60px; background: #0f172a; border-radius: 4px; overflow: hidden; position: relative; }
+  .station .bar {
+    position: absolute; bottom: 0; left: 0; right: 0;
+    background: linear-gradient(180deg, var(--good), #16a34a);
+    transition: height 0.3s;
+  }
+  .station.empty .bar { background: linear-gradient(180deg, var(--bad), #b91c1c); }
+  .station.full .bar { background: linear-gradient(180deg, var(--accent-2), #d97706); }
+  .station .truck-badge {
+    position: absolute; top: 6px; right: 6px;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    color: white; font-size: 11px; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .station .events {
+    font-size: 10px; margin-top: 4px; min-height: 14px;
+    color: var(--text-dim);
+  }
+  .event-stockout { color: var(--bad); }
+  .event-full { color: var(--accent-2); }
+
+  /* ── 트럭 ──────────────────────────── */
+  .trucks { display: flex; gap: 10px; }
+  .truck {
+    flex: 1;
+    background: var(--panel-2);
+    border-radius: 6px;
+    padding: 10px;
+    border: 2px solid transparent;
+    transition: all 0.2s;
+  }
+  .truck.current {
+    border-color: var(--accent);
+    background: #1e3a5f;
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+  .truck-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .truck-icon {
+    width: 26px; height: 26px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; color: white;
+  }
+  .truck-title { font-weight: 700; font-size: 13px; }
+  .truck-body { font-size: 11px; line-height: 1.6; color: var(--text-dim); font-family: "SF Mono", monospace; }
+  .truck-body .val { color: var(--text); }
+  .truck.idle .status-badge { color: var(--good); }
+  .truck.busy .status-badge { color: var(--accent-2); }
+
+  /* ── 결정 박스 ──────────────────────────── */
+  .decision-box { background: var(--panel-2); border-radius: 6px; padding: 12px; }
+  .decision-prompt { font-size: 12px; margin-bottom: 10px; color: var(--text); }
+  .decision-prompt .hl { color: var(--accent); font-weight: 700; }
+  .action-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+  .action-btn {
+    flex: 1; min-width: 60px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px;
+    border-radius: 6px;
+    font-size: 12px; font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .action-btn:hover:not(:disabled) { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .action-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .action-btn.masked { opacity: 0.25; }
+  .action-btn.stay { background: #3a4258; }
+  .auto-row { display: flex; gap: 6px; margin-top: 8px; }
+  .auto-btn {
+    flex: 1; background: var(--panel); border: 1px solid var(--border);
+    color: var(--text); padding: 6px; border-radius: 4px;
+    cursor: pointer; font-size: 11px; font-family: inherit;
+  }
+  .auto-btn:hover { background: var(--accent-2); color: var(--bg); }
+  .auto-btn.active { background: var(--accent-2); color: var(--bg); border-color: var(--accent-2); }
+
+  /* ── DQN ──────────────────────────── */
+  .dqn-flow {
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .dqn-box {
+    background: var(--panel-2); border-radius: 6px; padding: 10px;
+  }
+  .dqn-arrow { text-align: center; color: var(--accent); font-size: 16px; }
+  .obs-vec { font-family: "SF Mono", monospace; font-size: 10px; line-height: 1.5;
+             max-height: 64px; overflow-y: auto; color: var(--text-dim);
+             background: var(--bg); padding: 6px; border-radius: 4px; }
+  .obs-vec .obs-chunk { display: inline-block; margin-right: 6px; }
+  .obs-vec .obs-label { color: var(--accent); }
+  .q-values { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+  .q-cell {
+    background: var(--bg); border-radius: 4px; padding: 4px;
+    text-align: center; font-family: "SF Mono", monospace; font-size: 10px;
+  }
+  .q-cell .q-name { color: var(--text-dim); font-weight: 700; }
+  .q-cell .q-val { color: var(--text); margin-top: 2px; }
+  .q-cell.best { background: var(--accent); color: var(--bg); }
+  .q-cell.best .q-name, .q-cell.best .q-val { color: var(--bg); }
+  .q-cell.masked { opacity: 0.3; }
+  .buffer-bar {
+    height: 16px; background: var(--bg); border-radius: 4px; overflow: hidden;
+    position: relative;
+  }
+  .buffer-fill {
+    height: 100%; background: linear-gradient(90deg, var(--accent), var(--good));
+    transition: width 0.3s;
+  }
+  .buffer-text {
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-family: "SF Mono", monospace;
+    text-shadow: 0 0 4px black;
+  }
+
+  /* ── 컨트롤 ──────────────────────────── */
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .ctrl-btn {
+    background: var(--accent); border: none; color: var(--bg);
+    padding: 8px 16px; border-radius: 6px; font-weight: 700;
+    cursor: pointer; font-family: inherit; font-size: 13px;
+  }
+  .ctrl-btn:hover { background: #0ea5e9; }
+  .ctrl-btn.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  .ctrl-btn.secondary:hover { background: var(--border); }
+  .speed-control { display: flex; align-items: center; gap: 8px; }
+  .speed-control input { width: 120px; }
+
+  /* ── 로그 ──────────────────────────── */
+  .log {
+    height: 140px; overflow-y: auto;
+    font-family: "SF Mono", monospace; font-size: 11px;
+    background: var(--bg); border-radius: 6px; padding: 8px;
+    line-height: 1.5;
+  }
+  .log .ts { color: var(--text-dim); }
+  .log .action { color: var(--accent); }
+  .log .reward { color: var(--accent-2); }
+  .log .stockout { color: var(--bad); }
+  .log .arrived { color: var(--good); }
+  .log .episode { color: var(--accent); font-weight: 700; border-top: 1px solid var(--border); padding-top: 4px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<h1>🚚 RebalanceEnv + DQN 훈련 흐름 (인터랙티브)</h1>
+
+<div class="grid">
+
+  <!-- ─────── Row 1: Status + Controls ─────── -->
+  <div class="panel panel-full">
+    <h2>① 환경 상태</h2>
+    <div class="status-row">
+      <div class="stat">
+        <div class="label">시각 (10분 step)</div>
+        <div class="value accent" id="stat-time">00:00</div>
+      </div>
+      <div class="stat">
+        <div class="label">Step</div>
+        <div class="value accent" id="stat-step">0 / 144</div>
+      </div>
+      <div class="stat">
+        <div class="label">Episode Reward</div>
+        <div class="value bad" id="stat-reward">0.00</div>
+      </div>
+      <div class="stat">
+        <div class="label">cum stockout</div>
+        <div class="value bad" id="stat-stockout">0</div>
+      </div>
+      <div class="stat">
+        <div class="label">cum full</div>
+        <div class="value bad" id="stat-full">0</div>
+      </div>
+      <div class="stat">
+        <div class="label">cum travel km</div>
+        <div class="value" id="stat-km">0.0</div>
+      </div>
+      <div class="stat">
+        <div class="label">RL step (DQN 호출 수)</div>
+        <div class="value good" id="stat-rl-step">0</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────── Row 2 Left: Stations ─────── -->
+  <div class="panel">
+    <h2>② 정류소 (5개, capacity=20) + 트럭 이동</h2>
+    <h3>● 빨강 = 빈 정류소(stockout 위험), 주황 = 가득(full 위험), 초록 = 정상 / 트럭 위에 표시되는 숫자 = 도착까지 step</h3>
+    <div class="stations-wrap">
+      <div class="road-line"></div>
+      <div id="road-stops"></div>
+      <div class="trucks-overlay" id="trucks-overlay"></div>
+      <div class="stations" id="stations"></div>
+    </div>
+  </div>
+
+  <!-- ─────── Row 2 Right: DQN ─────── -->
+  <div class="panel">
+    <h2>③ DQN 내부 (학습 시뮬레이션)</h2>
+    <div class="dqn-flow">
+      <div class="dqn-box">
+        <h3>observation 벡터</h3>
+        <div class="obs-vec" id="obs-vec">대기 중...</div>
+      </div>
+      <div class="dqn-arrow">↓ MLP [256, 256]</div>
+      <div class="dqn-box">
+        <h3>Q-values (높을수록 좋은 정류소)</h3>
+        <div class="q-values" id="q-values"></div>
+      </div>
+      <div class="dqn-arrow">↓ argmax (또는 ε-greedy)</div>
+      <div class="dqn-box">
+        <h3>replay buffer</h3>
+        <div class="buffer-bar">
+          <div class="buffer-fill" id="buffer-fill" style="width: 0%"></div>
+          <div class="buffer-text" id="buffer-text">0 / 100,000 transitions</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────── Row 3 Left: Trucks + Decision ─────── -->
+  <div class="panel">
+    <h2>④ 트럭 상태 (parameter sharing — 같은 DQN 공유)</h2>
+    <div class="trucks" id="trucks"></div>
+
+    <h2 style="margin-top: 16px;">⑤ 결정: 트럭 <span id="current-truck-label" style="color: var(--accent);">0</span>은 어디로 갈까?</h2>
+    <div class="decision-box">
+      <div class="decision-prompt" id="decision-prompt">
+        action mask: <span id="mask-info" style="font-family: monospace;"></span>
+      </div>
+      <div class="action-buttons" id="action-buttons"></div>
+      <div class="auto-row">
+        <button class="auto-btn" id="mode-manual" onclick="setMode('manual')">수동 선택</button>
+        <button class="auto-btn active" id="mode-random" onclick="setMode('random')">Random</button>
+        <button class="auto-btn" id="mode-heuristic" onclick="setMode('heuristic')">Heuristic (most_imbalanced)</button>
+        <button class="auto-btn" id="mode-dqn" onclick="setMode('dqn')">DQN (학습된 듯한 정책)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─────── Row 3 Right: Log + Controls ─────── -->
+  <div class="panel">
+    <h2>⑥ 이벤트 로그</h2>
+    <div class="log" id="log"></div>
+    <h2 style="margin-top: 14px;">⑦ 컨트롤</h2>
+    <div class="controls">
+      <button class="ctrl-btn" id="btn-step" onclick="oneStep()">▶ 1 RL Step</button>
+      <button class="ctrl-btn" id="btn-play" onclick="togglePlay()">⏯ Play</button>
+      <button class="ctrl-btn secondary" onclick="resetEnv()">↻ Reset Episode</button>
+      <div class="speed-control">
+        <span style="font-size: 11px; color: var(--text-dim);">속도</span>
+        <input type="range" id="speed" min="50" max="1500" value="500" />
+        <span id="speed-val" style="font-size: 11px; font-family: monospace;">500ms</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+//  RebalanceEnv를 단순화한 시뮬레이터 (JS)
+// ════════════════════════════════════════════════════════════════
+const N_STATIONS = 5;
+const STATION_NAMES = ["A", "B", "C", "D", "E"];
+const N_TRUCKS = 3;
+const CAPACITY = 20;
+const TRUCK_CAPACITY = 20;
+const T_MAX = 144;
+const TRUCK_COLORS = ["#3b82f6", "#a855f7", "#ec4899"]; // 0, 1, 2
+
+// 정류소 간 거리(km) — 단순 고정 행렬
+const DISTANCE = [
+  [0,   1.2, 2.5, 3.8, 5.0],
+  [1.2, 0,   1.4, 2.7, 4.0],
+  [2.5, 1.4, 0,   1.5, 2.8],
+  [3.8, 2.7, 1.5, 0,   1.4],
+  [5.0, 4.0, 2.8, 1.4, 0  ],
+];
+const SPEED_KMH = 25;
+function travelSteps(i, j) {
+  if (i === j) return 0;
+  const minutes = DISTANCE[i][j] / SPEED_KMH * 60;
+  return Math.max(1, Math.ceil(minutes / 10));
+}
+
+// reward weights
+const W_STOCKOUT = -1.0;
+const W_FULL = -0.8;
+const W_TRAVEL_KM = -0.01;
+const W_TRAVEL_STEP = -0.005;
+
+// 환경 상태
+let env = {};
+
+function resetEnv() {
+  env = {
+    t: 0,
+    bikes: [15, 18, 5, 3, 10], // 초기 자전거
+    trucks: [
+      { loc: 0, dest: 0, load: 0, remaining: 0, totalSteps: 0, origin: 0 },
+      { loc: 2, dest: 2, load: 0, remaining: 0, totalSteps: 0, origin: 2 },
+      { loc: 4, dest: 4, load: 0, remaining: 0, totalSteps: 0, origin: 4 },
+    ],
+    currentTruck: 0,
+    rlStep: 0,
+    reward: 0,
+    cumStockout: 0,
+    cumFull: 0,
+    cumKm: 0,
+    bufferSize: Math.min(env.bufferSize || 0, 100000), // buffer는 episode 넘어 누적
+    lastEvents: Array(N_STATIONS).fill(""),
+    episode: (env.episode || 0) + 1,
+    done: false,
+  };
+  appendLog(`<span class="episode">═══ Episode ${env.episode} 시작 ═══</span>`);
+  render();
+}
+
+// demand 생성 (간단한 시간대별 패턴)
+function generateDemand(t) {
+  const hour = (t * 10 / 60) % 24;
+  // 출퇴근 시간대 (07-09, 18-20) 수요 증가
+  const peak = (hour >= 7 && hour <= 9) || (hour >= 18 && hour <= 20);
+  const base = peak ? 2.0 : 0.6;
+  const rentals = [];
+  const returns = [];
+  for (let i = 0; i < N_STATIONS; i++) {
+    rentals.push(Math.floor(Math.random() * (base + 1)));
+    returns.push(Math.floor(Math.random() * (base + 1)));
+  }
+  return { rentals, returns };
+}
+
+// 환경 1 시계 step
+function tick() {
+  let stepReward = 0;
+  const { rentals, returns } = generateDemand(env.t);
+  env.lastEvents = Array(N_STATIONS).fill("");
+
+  // demand 처리
+  for (let i = 0; i < N_STATIONS; i++) {
+    const served = Math.min(rentals[i], env.bikes[i]);
+    const stockout = rentals[i] - served;
+    env.bikes[i] -= served;
+    if (stockout > 0) {
+      env.cumStockout += stockout;
+      stepReward += W_STOCKOUT * stockout;
+      env.lastEvents[i] += `❗${stockout} stockout `;
+    }
+
+    const space = CAPACITY - env.bikes[i];
+    const servedRet = Math.min(returns[i], space);
+    const full = returns[i] - servedRet;
+    env.bikes[i] += servedRet;
+    if (full > 0) {
+      env.cumFull += full;
+      stepReward += W_FULL * full;
+      env.lastEvents[i] += `▲${full} full `;
+    }
+  }
+
+  // 트럭 이동/도착
+  for (const tr of env.trucks) {
+    if (tr.remaining === 0) continue;
+    stepReward += W_TRAVEL_STEP;
+    tr.remaining -= 1;
+    if (tr.remaining === 0) {
+      tr.loc = tr.dest;
+      applyRebalance(tr);
+    }
+  }
+
+  env.t += 1;
+  env.reward += stepReward;
+  return stepReward;
+}
+
+function applyRebalance(truck) {
+  const s = truck.loc;
+  const target = Math.floor(CAPACITY * 0.5);
+  const current = env.bikes[s];
+  if (current > target) {
+    const qty = Math.min(current - target, TRUCK_CAPACITY - truck.load);
+    env.bikes[s] -= qty;
+    truck.load += qty;
+    if (qty > 0) appendLog(`<span class="ts">t=${env.t}</span> <span class="arrived">트럭 도착 ${STATION_NAMES[s]}: 적재 +${qty} (load=${truck.load})</span>`);
+  } else if (current < target) {
+    const qty = Math.min(target - current, truck.load, CAPACITY - current);
+    env.bikes[s] += qty;
+    truck.load -= qty;
+    if (qty > 0) appendLog(`<span class="ts">t=${env.t}</span> <span class="arrived">트럭 도착 ${STATION_NAMES[s]}: 하차 -${qty} (load=${truck.load})</span>`);
+  }
+}
+
+// 다음 idle 트럭 찾기 (현재 트럭 제외 우선)
+function pickNextIdle(exclude) {
+  for (let i = 0; i < N_TRUCKS; i++) {
+    if (i === exclude) continue;
+    if (env.trucks[i].remaining === 0) return i;
+  }
+  if (env.trucks[exclude].remaining === 0) return exclude;
+  return null;
+}
+
+const TICK_DELAY_MS = 180; // 각 tick 후 부드러운 트럭 이동을 위한 짧은 대기
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function advanceUntilNextDecision() {
+  while (true) {
+    const next = pickNextIdle(env.currentTruck);
+    if (next !== null) {
+      env.currentTruck = next;
+      return false;
+    }
+    if (env.t >= T_MAX) return true;
+    tick();
+    render();                    // tick 후 즉시 화면 갱신
+    await sleep(TICK_DELAY_MS);  // CSS transition이 작동하도록 잠시 대기
+    if (env.t >= T_MAX) return true;
+  }
+}
+
+// step: action 적용
+async function stepEnv(action) {
+  const truck = env.trucks[env.currentTruck];
+  if (truck.remaining !== 0) return;
+  let stepReward = 0;
+  const dest = action;
+  if (dest === truck.loc) {
+    truck.remaining = 1;
+    truck.totalSteps = 1;
+    truck.origin = truck.loc;
+    truck.dest = dest;
+    appendLog(`<span class="ts">t=${env.t}</span> 트럭${env.currentTruck} <span class="action">stay @ ${STATION_NAMES[dest]}</span>`);
+  } else {
+    const steps = travelSteps(truck.loc, dest);
+    const km = DISTANCE[truck.loc][dest];
+    truck.origin = truck.loc;
+    truck.dest = dest;
+    truck.remaining = steps;
+    truck.totalSteps = steps;
+    stepReward += W_TRAVEL_KM * km;
+    env.cumKm += km;
+    appendLog(`<span class="ts">t=${env.t}</span> 트럭${env.currentTruck} <span class="action">${STATION_NAMES[truck.loc]}→${STATION_NAMES[dest]}</span> (${steps}step, ${km.toFixed(1)}km, <span class="reward">${(W_TRAVEL_KM * km).toFixed(2)}</span>)`);
+  }
+  env.reward += stepReward;
+  env.rlStep += 1;
+  env.bufferSize = Math.min((env.bufferSize || 0) + 1, 100000);
+  render();                              // action 적용 직후 트럭이 출발하는 모습 표시
+  await sleep(TICK_DELAY_MS);
+
+  const done = await advanceUntilNextDecision();
+  if (done) {
+    env.done = true;
+    appendLog(`<span class="episode">═══ Episode ${env.episode} 종료: reward=${env.reward.toFixed(2)}, stockout=${env.cumStockout}, full=${env.cumFull} ═══</span>`);
+  }
+  render();
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Action 선택 모드: 수동 / random / heuristic / dqn-mock
+// ════════════════════════════════════════════════════════════════
+let MODE = "random";
+function setMode(m) {
+  MODE = m;
+  document.querySelectorAll(".auto-btn").forEach(b => b.classList.remove("active"));
+  document.getElementById(`mode-${m}`).classList.add("active");
+  render();
+}
+
+function actionMasks() {
+  const mask = Array(N_STATIONS).fill(true);
+  for (let i = 0; i < N_TRUCKS; i++) {
+    if (i === env.currentTruck || env.trucks[i].remaining === 0) continue;
+    mask[env.trucks[i].dest] = false;
+  }
+  if (!mask.some(x => x)) mask[env.trucks[env.currentTruck].loc] = true;
+  return mask;
+}
+
+function computeQValues() {
+  // 학습된 듯한 DQN 흉내 — 휴리스틱 logic을 약간 noise로 변형
+  const tr = env.trucks[env.currentTruck];
+  const target = Math.floor(CAPACITY * 0.5);
+  const q = [];
+  for (let i = 0; i < N_STATIONS; i++) {
+    if (i === tr.loc) {
+      // 머무름: 보통 약간의 음수 Q
+      q.push(-2 + Math.random() * 0.5);
+      continue;
+    }
+    const distCost = DISTANCE[tr.loc][i] * 0.5;
+    const imbalance = Math.abs(env.bikes[i] - target);
+    let value;
+    if (tr.load === 0) {
+      // 빈 트럭: 잉여 정류소 (bikes > target) 갈수록 좋음
+      value = env.bikes[i] > target ? (env.bikes[i] - target) * 0.6 : -imbalance * 0.3;
+    } else if (tr.load >= TRUCK_CAPACITY * 0.8) {
+      // 가득 트럭: 부족 정류소 갈수록 좋음
+      value = env.bikes[i] < target ? (target - env.bikes[i]) * 0.6 : -imbalance * 0.3;
+    } else {
+      // 부분: |imbalance| 큰 정류소
+      value = imbalance * 0.4;
+    }
+    q.push(value - distCost + (Math.random() - 0.5) * 0.8);
+  }
+  return q;
+}
+
+function selectAction(mask) {
+  if (MODE === "random") {
+    const valid = [];
+    for (let i = 0; i < N_STATIONS; i++) if (mask[i]) valid.push(i);
+    return valid[Math.floor(Math.random() * valid.length)];
+  }
+  if (MODE === "heuristic") {
+    const tr = env.trucks[env.currentTruck];
+    const target = Math.floor(CAPACITY * 0.5);
+    let bestIdx = tr.loc, bestScore = -Infinity;
+    for (let i = 0; i < N_STATIONS; i++) {
+      if (!mask[i] || i === tr.loc) continue;
+      let score;
+      if (tr.load === 0) score = env.bikes[i];                       // 가득 곳
+      else if (tr.load >= TRUCK_CAPACITY * 0.8) score = -env.bikes[i]; // 빈 곳
+      else score = Math.abs(env.bikes[i] - target);
+      score -= DISTANCE[tr.loc][i] * 0.3;
+      if (score > bestScore) { bestScore = score; bestIdx = i; }
+    }
+    return bestIdx;
+  }
+  if (MODE === "dqn") {
+    const q = computeQValues();
+    let bestIdx = 0, bestQ = -Infinity;
+    for (let i = 0; i < N_STATIONS; i++) {
+      if (!mask[i]) continue;
+      if (q[i] > bestQ) { bestQ = q[i]; bestIdx = i; }
+    }
+    return bestIdx;
+  }
+  return null; // manual
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Step / Play / 컨트롤
+// ════════════════════════════════════════════════════════════════
+let playing = false;
+let playTimer = null;
+
+let stepping = false; // step 진행 중 중복 호출 방지
+async function oneStep() {
+  if (stepping) return;
+  if (env.done) { resetEnv(); return; }
+  const mask = actionMasks();
+  let action;
+  if (MODE === "manual") {
+    appendLog(`<span class="ts">t=${env.t}</span> ⏸ 수동 모드 — 트럭${env.currentTruck} action 선택 대기`);
+    render();
+    return; // 수동은 버튼 클릭 대기
+  }
+  action = selectAction(mask);
+  stepping = true;
+  try { await stepEnv(action); }
+  finally { stepping = false; }
+}
+
+async function manualAction(idx) {
+  if (stepping) return;
+  const mask = actionMasks();
+  if (!mask[idx]) return;
+  stepping = true;
+  try { await stepEnv(idx); }
+  finally { stepping = false; }
+}
+
+async function playLoop() {
+  while (playing) {
+    if (MODE === "manual") {
+      playing = false;
+      document.getElementById("btn-play").textContent = "⏯ Play";
+      return;
+    }
+    if (env.done) { resetEnv(); }
+    await oneStep();
+    const speed = parseInt(document.getElementById("speed").value);
+    await sleep(speed);
+  }
+}
+
+function togglePlay() {
+  playing = !playing;
+  document.getElementById("btn-play").textContent = playing ? "⏸ Pause" : "⏯ Play";
+  if (playing) playLoop();
+}
+
+document.getElementById("speed").addEventListener("input", e => {
+  document.getElementById("speed-val").textContent = e.target.value + "ms";
+});
+
+// ════════════════════════════════════════════════════════════════
+//  Rendering
+// ════════════════════════════════════════════════════════════════
+function fmtTime(t) {
+  const totalMin = t * 10;
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+}
+
+function render() {
+  // 상단 stats
+  document.getElementById("stat-time").textContent = fmtTime(env.t);
+  document.getElementById("stat-step").textContent = `${env.t} / ${T_MAX}`;
+  document.getElementById("stat-reward").textContent = env.reward.toFixed(2);
+  document.getElementById("stat-stockout").textContent = env.cumStockout;
+  document.getElementById("stat-full").textContent = env.cumFull;
+  document.getElementById("stat-km").textContent = env.cumKm.toFixed(1);
+  document.getElementById("stat-rl-step").textContent = env.rlStep;
+
+  // 정류소
+  const stationsEl = document.getElementById("stations");
+  stationsEl.innerHTML = "";
+  for (let i = 0; i < N_STATIONS; i++) {
+    const bikes = env.bikes[i];
+    const ratio = bikes / CAPACITY;
+    const trucksHere = env.trucks.filter((t, idx) => t.loc === i && t.remaining === 0).length;
+    let cls = "";
+    if (bikes <= 2) cls = "empty";
+    else if (bikes >= 18) cls = "full";
+    const trucksMark = trucksHere > 0 ? "has-truck" : "";
+    stationsEl.innerHTML += `
+      <div class="station ${cls} ${trucksMark}">
+        <div class="name">${STATION_NAMES[i]}</div>
+        <div class="bikes">${bikes} / ${CAPACITY}</div>
+        <div class="bar-wrap"><div class="bar" style="height: ${ratio*100}%"></div></div>
+        <div class="events">${env.lastEvents[i] || "&nbsp;"}</div>
+      </div>
+    `;
+  }
+
+  // road stops (정류소 위치 마커)
+  const stopsEl = document.getElementById("road-stops");
+  if (stopsEl.children.length === 0) {
+    for (let i = 0; i < N_STATIONS; i++) {
+      const stop = document.createElement("div");
+      stop.className = "road-stop";
+      stop.style.left = `${((i + 0.5) / N_STATIONS) * 100}%`;
+      stopsEl.appendChild(stop);
+    }
+  }
+
+  // 트럭 오버레이 — 정류소 사이 이동 애니메이션
+  const overlayEl = document.getElementById("trucks-overlay");
+  // 트럭 div가 처음 그려질 때만 생성, 이후엔 위치만 업데이트 → CSS transition 작동
+  env.trucks.forEach((tr, idx) => {
+    let el = document.getElementById(`mtruck-${idx}`);
+    if (!el) {
+      el = document.createElement("div");
+      el.id = `mtruck-${idx}`;
+      el.className = "moving-truck";
+      el.style.background = TRUCK_COLORS[idx];
+      el.innerHTML = `
+        <span class="truck-num">${idx}</span>
+        <div class="load-label"></div>
+        <div class="progress-label"></div>
+      `;
+      overlayEl.appendChild(el);
+    }
+    // 위치 계산 — 트럭별로 약간씩 어긋나서 겹침 방지
+    let xFrac;
+    if (tr.remaining === 0) {
+      xFrac = (tr.loc + 0.5) / N_STATIONS;
+    } else {
+      // 출발지 → 목적지 보간 (진행도: 0=출발, 1=도착)
+      const progress = (tr.totalSteps - tr.remaining) / tr.totalSteps;
+      xFrac = (tr.origin + (tr.dest - tr.origin) * progress + 0.5) / N_STATIONS;
+    }
+    el.style.left = `${xFrac * 100}%`;
+    // 동시 위치 트럭이 겹치지 않게 살짝 y 오프셋
+    const sameSpot = env.trucks.filter((t, j) => j < idx && t.remaining === 0 && tr.remaining === 0 && t.loc === tr.loc).length;
+    el.style.top = `${6 + sameSpot * 6}px`;
+
+    el.className = "moving-truck";
+    if (tr.remaining > 0) el.classList.add("busy");
+    if (idx === env.currentTruck && tr.remaining === 0 && !env.done) el.classList.add("current");
+
+    el.querySelector(".load-label").textContent = `load ${tr.load}`;
+    const prog = el.querySelector(".progress-label");
+    if (tr.remaining > 0) {
+      prog.textContent = `${tr.remaining}step ⟶ ${STATION_NAMES[tr.dest]}`;
+      prog.style.display = "block";
+    } else {
+      prog.style.display = "none";
+    }
+  });
+
+  // 트럭
+  const trucksEl = document.getElementById("trucks");
+  trucksEl.innerHTML = "";
+  env.trucks.forEach((tr, idx) => {
+    const isIdle = tr.remaining === 0;
+    const isCurrent = idx === env.currentTruck && isIdle && !env.done;
+    trucksEl.innerHTML += `
+      <div class="truck ${isCurrent ? "current" : ""} ${isIdle ? "idle" : "busy"}">
+        <div class="truck-head">
+          <div class="truck-icon" style="background:${TRUCK_COLORS[idx]}">${idx}</div>
+          <div>
+            <div class="truck-title">트럭 ${idx}${isCurrent ? " ★" : ""}</div>
+            <div class="status-badge" style="font-size:10px">${isIdle ? "● idle" : "→ busy"}</div>
+          </div>
+        </div>
+        <div class="truck-body">
+          위치: <span class="val">${STATION_NAMES[tr.loc]}</span><br>
+          ${isIdle ? "대기 중" : `→ ${STATION_NAMES[tr.dest]} (<span class="val">${tr.remaining}</span> step)`}<br>
+          적재: <span class="val">${tr.load} / ${TRUCK_CAPACITY}</span>
+        </div>
+      </div>
+    `;
+  });
+
+  // 결정 박스
+  const mask = actionMasks();
+  document.getElementById("current-truck-label").textContent = env.currentTruck;
+  document.getElementById("mask-info").innerHTML = STATION_NAMES.map((n, i) => mask[i] ? `<span style="color:var(--good)">${n}</span>` : `<span style="color:var(--bad);text-decoration:line-through">${n}</span>`).join(" ");
+
+  const btnsEl = document.getElementById("action-buttons");
+  btnsEl.innerHTML = "";
+  const curLoc = env.trucks[env.currentTruck].loc;
+  STATION_NAMES.forEach((name, i) => {
+    const masked = !mask[i];
+    const isStay = i === curLoc;
+    btnsEl.innerHTML += `
+      <button class="action-btn ${masked ? "masked" : ""} ${isStay ? "stay" : ""}" ${masked ? "disabled" : ""} ${MODE !== "manual" ? "disabled" : ""} onclick="manualAction(${i})">
+        ${name}${isStay ? " (stay)" : ""}
+      </button>
+    `;
+  });
+
+  // DQN — obs vector
+  const tr = env.trucks[env.currentTruck];
+  const obsVec = document.getElementById("obs-vec");
+  obsVec.innerHTML = `
+    <span class="obs-chunk"><span class="obs-label">bike_ratio:</span> [${env.bikes.map(b => (b/CAPACITY).toFixed(2)).join(", ")}]</span>
+    <span class="obs-chunk"><span class="obs-label">loc:</span> [${env.trucks.map(t => (t.loc/(N_STATIONS-1)).toFixed(2)).join(", ")}]</span>
+    <span class="obs-chunk"><span class="obs-label">load:</span> [${env.trucks.map(t => (t.load/TRUCK_CAPACITY).toFixed(2)).join(", ")}]</span>
+    <span class="obs-chunk"><span class="obs-label">remaining:</span> [${env.trucks.map(t => Math.min(t.remaining,10)/10).map(v=>v.toFixed(2)).join(", ")}]</span>
+    <span class="obs-chunk"><span class="obs-label">cur_truck:</span> [${env.trucks.map((_,i) => i===env.currentTruck ? 1 : 0).join(", ")}]</span>
+    <span class="obs-chunk"><span class="obs-label">time:</span> sin/cos(${fmtTime(env.t)})</span>
+  `;
+
+  // Q-values
+  const qVals = computeQValues();
+  const bestQ = Math.max(...qVals.map((q, i) => mask[i] ? q : -Infinity));
+  const qEl = document.getElementById("q-values");
+  qEl.innerHTML = "";
+  qVals.forEach((q, i) => {
+    const isBest = q === bestQ && mask[i] && MODE === "dqn";
+    const masked = !mask[i];
+    qEl.innerHTML += `
+      <div class="q-cell ${isBest ? "best" : ""} ${masked ? "masked" : ""}">
+        <div class="q-name">${STATION_NAMES[i]}</div>
+        <div class="q-val">${q.toFixed(2)}</div>
+      </div>
+    `;
+  });
+
+  // Buffer
+  const bufPct = (env.bufferSize / 100000) * 100;
+  document.getElementById("buffer-fill").style.width = bufPct + "%";
+  document.getElementById("buffer-text").textContent = `${env.bufferSize.toLocaleString()} / 100,000 transitions`;
+}
+
+function appendLog(html) {
+  const log = document.getElementById("log");
+  const line = document.createElement("div");
+  line.innerHTML = html;
+  log.appendChild(line);
+  log.scrollTop = log.scrollHeight;
+}
+
+// 시작
+resetEnv();
+</script>
+
+<div style="margin-top: 20px; font-size: 12px; color: var(--text-dim); line-height: 1.8;">
+  <h2 style="color: var(--accent-2); margin-bottom: 8px;">사용법</h2>
+  <ul style="padding-left: 20px;">
+    <li><b>▶ 1 RL Step</b> — DQN이 한 번 결정하는 step (트럭 1대의 결정). action 모드에 따라 자동 선택되거나 수동 대기.</li>
+    <li><b>⏯ Play</b> — 자동 반복 (Speed slider로 속도 조절). 수동 모드일 땐 자동 정지.</li>
+    <li><b>↻ Reset</b> — episode 초기화. buffer는 그대로 유지(여러 episode가 buffer를 공유하는 학습 흐름을 반영).</li>
+    <li><b>모드 4종</b>:
+      <ul>
+        <li>수동 — 5개 정류소 버튼 직접 클릭 (자기 위치 = stay)</li>
+        <li>Random — 마스크 통과한 정류소 중 무작위</li>
+        <li>Heuristic — most_imbalanced (빈/가득 트럭에 따라 부족·잉여 정류소 선호)</li>
+        <li>DQN — 학습된 듯한 Q-value 추정 (휴리스틱 + 노이즈) → argmax</li>
+      </ul>
+    </li>
+    <li><b>action mask</b> — 다른 트럭이 향하는 목적지는 차단(빨간 취소선). DQN 모드에서 Q값이 가장 높아도 마스크된 곳은 선택 안 됨.</li>
+    <li><b>buffer</b> — 매 RL step마다 transition 1개 추가. 100k 차면 oldest부터 덮어씀(실제 SB3 DQN 동작).</li>
+  </ul>
+
+  <h2 style="color: var(--accent-2); margin-top: 14px; margin-bottom: 8px;">관찰 포인트</h2>
+  <ul style="padding-left: 20px;">
+    <li>Random vs Heuristic vs DQN의 누적 reward / stockout 차이 비교</li>
+    <li>출퇴근 시간대(07~09, 18~20)에 demand 폭증 → stockout/full 급증</li>
+    <li>★ 표시된 트럭이 "지금 결정 차례" — observation의 cur_truck onehot이 이 트럭을 가리킴</li>
+    <li>모든 트럭이 busy면 시계가 빨리 흘러감 (DQN 호출 없이 _tick 반복)</li>
+  </ul>
+</div>
+
+</body>
+</html>
