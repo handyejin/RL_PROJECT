@@ -66,6 +66,20 @@ def main() -> None:
     ap.add_argument("--no-q", action="store_true", help="Q-value 추출 비활성")
     ap.add_argument("--urgent-low", type=float, default=0.0)
     ap.add_argument("--urgent-high", type=float, default=1.0)
+    ap.add_argument("--strict-mask", action="store_true",
+                    help="학습 환경과 일치시키기 위한 strict_urgent_mask 적용")
+    ap.add_argument("--w-travel-km", type=float, default=-0.01,
+                    help="학습 시 사용한 km 비용 (기본 -0.01, config에선 -0.008)")
+    ap.add_argument("--w-travel-step", type=float, default=-0.005,
+                    help="학습 시 사용한 step 비용 (기본 -0.005, config에선 -0.002)")
+    ap.add_argument("--target-fill-ratio", type=float, default=0.5,
+                    help="정류소 채움 목표 (학습 시 사용한 값)")
+    ap.add_argument("--w-work", type=float, default=0.0,
+                    help="적재/하차 1대당 양수 reward (학습 시 사용한 값)")
+    ap.add_argument("--w-idle", type=float, default=0.0,
+                    help="허탕 방문 페널티 (학습 시 사용한 값)")
+    ap.add_argument("--future-demand-horizon", type=int, default=0,
+                    help="학습 시 사용한 미래 demand obs horizon")
     args = ap.parse_args()
 
     print(f"[1/3] loading episode: {args.district} @ {args.date}")
@@ -79,8 +93,15 @@ def main() -> None:
 
     env = RebalanceEnv(
         ep, n_trucks=args.n_trucks,
+        target_fill_ratio=args.target_fill_ratio,
         urgent_low_ratio=args.urgent_low,
         urgent_high_ratio=args.urgent_high,
+        strict_urgent_mask=args.strict_mask,
+        w_travel_km=args.w_travel_km,
+        w_travel_step=args.w_travel_step,
+        w_work_per_bike=args.w_work,
+        w_idle_visit=args.w_idle,
+        future_demand_horizon=args.future_demand_horizon,
     )
 
     print(f"\n[2/3] loading model: {args.model} (algo={args.algo})")
@@ -182,7 +203,7 @@ def main() -> None:
             "total_full": int(env.cum_full),
             "total_km": float(env.cum_travel_km),
             "truck_capacity": int(env.truck_capacity),
-            "station_capacity": int(ep.capacity[0]),
+            "station_capacities": ep.capacity.astype(int).tolist(),
         },
         "snapshots": snapshots,
     }

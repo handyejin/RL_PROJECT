@@ -142,7 +142,11 @@ def load_episode(
     # 날씨 + 캘린더 슬라이스 (전처리 parquet에서 가져옴)
     weather_arr, cal_flags = _build_weather_and_calendar(processed_dir, timestamps)
 
-    capacity = np.full(len(station_ids), capacity_per_station, dtype=np.int32)
+    # capacity: stations.parquet 에 있으면 정류소별 실제 값, 없으면 일괄 fallback
+    if "capacity" in stations.columns:
+        capacity = stations["capacity"].astype(np.int32).to_numpy()
+    else:
+        capacity = np.full(len(station_ids), capacity_per_station, dtype=np.int32)
     initial_bikes = _estimate_initial_bikes(
         capacity, rentals, returns, initial_distribution, initial_fill_ratio
     )

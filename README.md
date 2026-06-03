@@ -317,7 +317,7 @@ preprocess가 QC를 drop하면 결과적으로 `t` 한 컬럼만 남는다 (52,5
 | `station_coords` | (N, 2) | 정류소들의 `lat`, `lon` |
 | `distance_matrix` | (N, N) km | Haversine (`utils/geo`) |
 | `travel_steps` | (N, N) int | `distance / 25km/h / 10min` |
-| `capacity` | (N,) | 일괄 20 |
+| `capacity` | (N,) | `stations.parquet`의 `capacity` 컬럼 (정류소별 실측값, 마포구 5~40·평균 12·중앙값 10). 컬럼 없을 때만 `capacity_per_station=20` fallback |
 | `initial_bikes` | (N,) | data_based(첫 6 step net flow 보정) / uniform |
 | `rentals` | (T=144, N) | `demand_10min` 슬라이스 → dense 격자 |
 | `returns` | (T=144, N) | 위와 동일 |
@@ -335,10 +335,10 @@ Parameter sharing single-agent wrapper — **1 RL step = 1 트럭의 1 결정**.
 - `action_space = Discrete(N)` — 다음 갈 정류소. 자기 위치 선택 시 1 step 머무름
 - `observation` (`Box[-1,1]`):
   `[bike_ratio(N), truck_loc_norm, load_ratio, remaining_steps_norm, current_truck_onehot, sin/cos(hour), sin/cos(episode_frac)]`
-- 도착 시 적재/하차는 **규칙 기반** — `target = capacity × 0.5` 기준으로 잉여면 트럭에 싣고, 부족이면 트럭에서 내림
+- 도착 시 적재/하차는 **규칙 기반** — `target = 정류소 capacity × target_fill_ratio(=0.5)` 기준 (정류소마다 capacity가 다르므로 target도 다름). 잉여면 트럭에 싣고, 부족이면 트럭에서 내림. 트럭 적재 한도는 별도 `truck_capacity`(기본 20, `--truck-capacity`로 조정)
 - 보상: `stockout=-1.0, full=-0.8, travel_km=-0.01, travel_step=-0.005`
 - `done`은 `t >= T` (24h = 144 step)
-- ⚠️ `get_action_mask`는 현재 `np.ones` placeholder — config의 `use_action_mask`와 무관하게 **실제 마스킹은 적용 안 되는 상태**
+- `action_masks()` (alias `get_action_mask`): in-flight 트럭 목적지 차단, `strict_urgent_mask=True`면 위급 정류소만 허용(자기 위치 stay 항상 허용), 전부 막히면 자기 위치 fallback. `use_action_mask=False`면 all-ones
 
 ### 5.5 베이스라인 (`src/agents/baselines.py`)
 

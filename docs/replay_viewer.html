@@ -49,6 +49,16 @@
   .map-svg { flex: 1; min-height: 400px; background: #0a1224; border-radius: 6px; }
   .station-circle { transition: fill 0.3s; cursor: pointer; }
   .station-circle:hover { stroke: white; stroke-width: 2; }
+  /* 즉시 반응하는 HTML overlay tooltip */
+  #station-tooltip {
+    position: fixed; display: none; pointer-events: none; z-index: 1000;
+    background: rgba(15, 23, 42, 0.95); color: #e2e8f0;
+    padding: 6px 10px; border-radius: 4px; border: 1px solid #475569;
+    font-family: monospace; font-size: 12px; line-height: 1.5;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5); white-space: nowrap;
+  }
+  #station-tooltip .id { color: #38bdf8; font-weight: bold; }
+  #station-tooltip .urgent { color: #f87171; }
   .truck-circle { transition: cx var(--anim-dur, 0.8s) cubic-bezier(0.4, 0, 0.2, 1), cy var(--anim-dur, 0.8s) cubic-bezier(0.4, 0, 0.2, 1);
                   filter: drop-shadow(0 2px 4px rgba(0,0,0,0.6)); }
   .truck-line { transition: x1 var(--anim-dur, 0.8s), y1 var(--anim-dur, 0.8s), x2 var(--anim-dur, 0.8s), y2 var(--anim-dur, 0.8s); }
@@ -70,6 +80,13 @@
 
   /* reward curve */
   .curve-svg { width: 100%; height: 90px; background: #0a1224; border-radius: 4px; }
+  .curve-wrap { position: relative; }
+  .curve-wrap .lbl { position: absolute; font: 10px monospace; pointer-events: none; padding: 1px 4px; }
+  .curve-wrap .lbl-max { top: 2px; left: 4px; color: #94a3b8; }
+  .curve-wrap .lbl-min { bottom: 2px; left: 4px; color: #94a3b8; }
+  .curve-wrap .lbl-end { bottom: 2px; right: 4px; color: #38bdf8; }
+  .curve-wrap .lbl-cur { color: #0f172a; background: #fbbf24; border-radius: 3px; font-weight: bold;
+                          transform: translateX(-50%); white-space: nowrap; }
 
   /* controls */
   .controls-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -103,6 +120,8 @@
 </head>
 <body>
 
+<div id="station-tooltip"></div>
+
 <h1>🎬 DQN Replay Viewer</h1>
 
 <div class="grid">
@@ -118,17 +137,182 @@
       <div class="stat"><div class="label">최종 reward</div><div class="value bad" id="m-totalreward">-</div></div>
       <div class="stat"><div class="label">최종 stockout</div><div class="value bad" id="m-stockout">-</div></div>
       <div class="stat"><div class="label">최종 full</div><div class="value bad" id="m-full">-</div></div>
+      <div class="stat"><div class="label">현재 위급 (빈/가득)</div><div class="value bad" id="m-urgent">-</div></div>
+      <div class="stat"><div class="label">평균 fill</div><div class="value" id="m-avgfill">-</div></div>
       <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
         <select id="quick-select" style="background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 6px 8px; border-radius: 6px; font-family: inherit; font-size: 12px;">
-          <option value="">━ 빠른 전환 (year_v2 eval set) ━</option>
-          <option value="replay_v7_2025-03-25.json">2025-03-25 (봄 화, reward -445)</option>
-          <option value="replay_v7_2025-04-18.json">2025-04-18 (봄 금, reward -591)</option>
-          <option value="replay_v7_2025-05-17.json">2025-05-17 (봄 토, reward -339)</option>
-          <option value="replay_v7_2025-07-01.json">2025-07-01 (여름 화, reward -242)</option>
-          <option value="replay_v7_2025-07-06.json">2025-07-06 (여름 일, reward -167) ⭐</option>
-          <option value="replay_v7_2025-07-09.json">2025-07-09 (여름 수, reward -455)</option>
-          <option value="replay_v7_2025-08-21.json">2025-08-21 (여름 목, reward -496)</option>
-          <option value="replay.json">━ default (1/15) ━</option>
+          <option value="">━ 빠른 전환 (eval set 7일) ━</option>
+          <optgroup label="Vanilla DQN 500k (best -657.6)">
+            <option value="replay_2025-03-25.json">2025-03-25 (봄 화, reward -935.9)</option>
+            <option value="replay_2025-04-18.json">2025-04-18 (봄 금, reward -1104.5)</option>
+            <option value="replay_2025-05-17.json">2025-05-17 (봄 토, reward -558.3)</option>
+            <option value="replay_2025-07-01.json">2025-07-01 (여름 화, reward -619.3)</option>
+            <option value="replay_2025-07-06.json">2025-07-06 (여름 일, reward -471.5) ⭐</option>
+            <option value="replay_2025-07-09.json">2025-07-09 (여름 수, reward -960.1)</option>
+            <option value="replay_2025-08-21.json">2025-08-21 (여름 목, reward -1123.4)</option>
+          </optgroup>
+          <optgroup label="MaskableDQN 500k (best -604.2)">
+            <option value="replay_masked_2025-03-25.json">2025-03-25 (봄 화, reward -937.0)</option>
+            <option value="replay_masked_2025-04-18.json">2025-04-18 (봄 금, reward -1117.4)</option>
+            <option value="replay_masked_2025-05-17.json">2025-05-17 (봄 토, reward -558.5)</option>
+            <option value="replay_masked_2025-07-01.json">2025-07-01 (여름 화, reward -624.3)</option>
+            <option value="replay_masked_2025-07-06.json">2025-07-06 (여름 일, reward -483.7) ⭐</option>
+            <option value="replay_masked_2025-07-09.json">2025-07-09 (여름 수, reward -973.6)</option>
+            <option value="replay_masked_2025-08-21.json">2025-08-21 (여름 목, reward -1131.3)</option>
+          </optgroup>
+          <optgroup label="DQN + shaping_scale=0.5 500k (best -653.2)">
+            <option value="replay_shaped_2025-03-25.json">2025-03-25 (봄 화, reward -917.8)</option>
+            <option value="replay_shaped_2025-04-18.json">2025-04-18 (봄 금, reward -1093.9)</option>
+            <option value="replay_shaped_2025-05-17.json">2025-05-17 (봄 토, reward -551.1)</option>
+            <option value="replay_shaped_2025-07-01.json">2025-07-01 (여름 화, reward -620.3)</option>
+            <option value="replay_shaped_2025-07-06.json">2025-07-06 (여름 일, reward -477.1) ⭐</option>
+            <option value="replay_shaped_2025-07-09.json">2025-07-09 (여름 수, reward -950.4)</option>
+            <option value="replay_shaped_2025-08-21.json">2025-08-21 (여름 목, reward -1114.7)</option>
+          </optgroup>
+          <optgroup label="MaskableDQN + shaping 500k (best -598.2)">
+            <option value="replay_masked_shaped_2025-03-25.json">2025-03-25 (봄 화, reward -938.8)</option>
+            <option value="replay_masked_shaped_2025-04-18.json">2025-04-18 (봄 금, reward -1102.7)</option>
+            <option value="replay_masked_shaped_2025-05-17.json">2025-05-17 (봄 토, reward -557.9)</option>
+            <option value="replay_masked_shaped_2025-07-01.json">2025-07-01 (여름 화, reward -624.7)</option>
+            <option value="replay_masked_shaped_2025-07-06.json">2025-07-06 (여름 일, reward -468.0) ⭐</option>
+            <option value="replay_masked_shaped_2025-07-09.json">2025-07-09 (여름 수, reward -962.5)</option>
+            <option value="replay_masked_shaped_2025-08-21.json">2025-08-21 (여름 목, reward -1110.7)</option>
+          </optgroup>
+          <optgroup label="MaskableDQN + shaping + boosted exploration 500k (best -597.5)">
+            <option value="replay_masked_explore_2025-03-25.json">2025-03-25 (봄 화, reward -933.8)</option>
+            <option value="replay_masked_explore_2025-04-18.json">2025-04-18 (봄 금, reward -1112.9)</option>
+            <option value="replay_masked_explore_2025-05-17.json">2025-05-17 (봄 토, reward -554.4)</option>
+            <option value="replay_masked_explore_2025-07-01.json">2025-07-01 (여름 화, reward -624.5)</option>
+            <option value="replay_masked_explore_2025-07-06.json">2025-07-06 (여름 일, reward -477.2) ⭐</option>
+            <option value="replay_masked_explore_2025-07-09.json">2025-07-09 (여름 수, reward -949.0)</option>
+            <option value="replay_masked_explore_2025-08-21.json">2025-08-21 (여름 목, reward -1115.4)</option>
+          </optgroup>
+          <optgroup label="MaskableDQN + strict_urgent_mask 500k (best -596.2)">
+            <option value="replay_masked_strict_2025-03-25.json">2025-03-25 (봄 화, reward -951.3)</option>
+            <option value="replay_masked_strict_2025-04-18.json">2025-04-18 (봄 금, reward -1131.7)</option>
+            <option value="replay_masked_strict_2025-05-17.json">2025-05-17 (봄 토, reward -560.0)</option>
+            <option value="replay_masked_strict_2025-07-01.json">2025-07-01 (여름 화, reward -630.5)</option>
+            <option value="replay_masked_strict_2025-07-06.json">2025-07-06 (여름 일, reward -477.2) ⭐</option>
+            <option value="replay_masked_strict_2025-07-09.json">2025-07-09 (여름 수, reward -969.0)</option>
+            <option value="replay_masked_strict_2025-08-21.json">2025-08-21 (여름 목, reward -1133.3)</option>
+          </optgroup>
+          <optgroup label="DDQN (Double Q) 500k (best -593.6)">
+            <option value="replay_ddqn_2025-03-25.json">2025-03-25 (봄 화, reward -951.3)</option>
+            <option value="replay_ddqn_2025-04-18.json">2025-04-18 (봄 금, reward -1131.7)</option>
+            <option value="replay_ddqn_2025-05-17.json">2025-05-17 (봄 토, reward -560.0)</option>
+            <option value="replay_ddqn_2025-07-01.json">2025-07-01 (여름 화, reward -630.5)</option>
+            <option value="replay_ddqn_2025-07-06.json">2025-07-06 (여름 일, reward -477.2) ⭐</option>
+            <option value="replay_ddqn_2025-07-09.json">2025-07-09 (여름 수, reward -969.0)</option>
+            <option value="replay_ddqn_2025-08-21.json">2025-08-21 (여름 목, reward -1133.3)</option>
+          </optgroup>
+          <optgroup label="DDQN + stay 차단 500k (det. 평균 -655.1)">
+            <option value="replay_ddqn_no_stay_2025-03-25.json">2025-03-25 (봄 화, reward -739.8)</option>
+            <option value="replay_ddqn_no_stay_2025-04-18.json">2025-04-18 (봄 금, reward -913.1)</option>
+            <option value="replay_ddqn_no_stay_2025-05-17.json">2025-05-17 (봄 토, reward -403.1)</option>
+            <option value="replay_ddqn_no_stay_2025-07-01.json">2025-07-01 (여름 화, reward -467.5)</option>
+            <option value="replay_ddqn_no_stay_2025-07-06.json">2025-07-06 (여름 일, reward -287.9) ⭐</option>
+            <option value="replay_ddqn_no_stay_2025-07-09.json">2025-07-09 (여름 수, reward -885.5)</option>
+            <option value="replay_ddqn_no_stay_2025-08-21.json">2025-08-21 (여름 목, reward -888.7)</option>
+          </optgroup>
+          <optgroup label="DDQN + stay 차단 1M (det. 평균 -645.2)">
+            <option value="replay_ddqn_no_stay_1M_2025-03-25.json">2025-03-25 (봄 화, reward -732.1)</option>
+            <option value="replay_ddqn_no_stay_1M_2025-04-18.json">2025-04-18 (봄 금, reward -827.6)</option>
+            <option value="replay_ddqn_no_stay_1M_2025-05-17.json">2025-05-17 (봄 토, reward -394.0)</option>
+            <option value="replay_ddqn_no_stay_1M_2025-07-01.json">2025-07-01 (여름 화, reward -494.0)</option>
+            <option value="replay_ddqn_no_stay_1M_2025-07-06.json">2025-07-06 (여름 일, reward -299.4) ⭐</option>
+            <option value="replay_ddqn_no_stay_1M_2025-07-09.json">2025-07-09 (여름 수, reward -732.2)</option>
+            <option value="replay_ddqn_no_stay_1M_2025-08-21.json">2025-08-21 (여름 목, reward -1037.2)</option>
+          </optgroup>
+          <optgroup label="DDQN + det. eval 1M / fill 0.5 (det. 평균 -602.6) 🏆">
+            <option value="replay_ddqn_det_2025-03-25.json">2025-03-25 (봄 화, reward -661.9)</option>
+            <option value="replay_ddqn_det_2025-04-18.json">2025-04-18 (봄 금, reward -819.5)</option>
+            <option value="replay_ddqn_det_2025-05-17.json">2025-05-17 (봄 토, reward -390.2)</option>
+            <option value="replay_ddqn_det_2025-07-01.json">2025-07-01 (여름 화, reward -437.1)</option>
+            <option value="replay_ddqn_det_2025-07-06.json">2025-07-06 (여름 일, reward -355.9) ⭐</option>
+            <option value="replay_ddqn_det_2025-07-09.json">2025-07-09 (여름 수, reward -718.0)</option>
+            <option value="replay_ddqn_det_2025-08-21.json">2025-08-21 (여름 목, reward -835.8)</option>
+          </optgroup>
+          <optgroup label="DDQN + lr_decay + fill 0.8 1M (det. 평균 -694.9, vs 0.8휴 -84.1)">
+            <option value="replay_lrdecay_fill80_2025-03-25.json">2025-03-25 (봄 화, reward -782.0)</option>
+            <option value="replay_lrdecay_fill80_2025-04-18.json">2025-04-18 (봄 금, reward -917.5)</option>
+            <option value="replay_lrdecay_fill80_2025-05-17.json">2025-05-17 (봄 토, reward -459.8)</option>
+            <option value="replay_lrdecay_fill80_2025-07-01.json">2025-07-01 (여름 화, reward -547.8)</option>
+            <option value="replay_lrdecay_fill80_2025-07-06.json">2025-07-06 (여름 일, reward -357.7) ⭐</option>
+            <option value="replay_lrdecay_fill80_2025-07-09.json">2025-07-09 (여름 수, reward -792.5)</option>
+            <option value="replay_lrdecay_fill80_2025-08-21.json">2025-08-21 (여름 목, reward -1006.8)</option>
+          </optgroup>
+          <optgroup label="DDQN + lr_decay + fill 0.5 1M (det. 평균 -593.0) 🏆">
+            <option value="replay_lrdecay_fill50_2025-03-25.json">2025-03-25 (봄 화, reward -650.6)</option>
+            <option value="replay_lrdecay_fill50_2025-04-18.json">2025-04-18 (봄 금, reward -798.5)</option>
+            <option value="replay_lrdecay_fill50_2025-05-17.json">2025-05-17 (봄 토, reward -419.8)</option>
+            <option value="replay_lrdecay_fill50_2025-07-01.json">2025-07-01 (여름 화, reward -436.8)</option>
+            <option value="replay_lrdecay_fill50_2025-07-06.json">2025-07-06 (여름 일, reward -256.3) ⭐</option>
+            <option value="replay_lrdecay_fill50_2025-07-09.json">2025-07-09 (여름 수, reward -711.4)</option>
+            <option value="replay_lrdecay_fill50_2025-08-21.json">2025-08-21 (여름 목, reward -877.4)</option>
+          </optgroup>
+          <optgroup label="DDQN + work reward 1M (det. 평균 -536.8, vs work휴 -99.8)">
+            <option value="replay_work_2025-03-25.json">2025-03-25 (봄 화, reward -619.1)</option>
+            <option value="replay_work_2025-04-18.json">2025-04-18 (봄 금, reward -712.2)</option>
+            <option value="replay_work_2025-05-17.json">2025-05-17 (봄 토, reward -345.9)</option>
+            <option value="replay_work_2025-07-01.json">2025-07-01 (여름 화, reward -385.7)</option>
+            <option value="replay_work_2025-07-06.json">2025-07-06 (여름 일, reward -232.6) ⭐</option>
+            <option value="replay_work_2025-07-09.json">2025-07-09 (여름 수, reward -654.2)</option>
+            <option value="replay_work_2025-08-21.json">2025-08-21 (여름 목, reward -808.3)</option>
+          </optgroup>
+          <optgroup label="BC v2 + RL fine-tune 1M (det. 평균 -539.6, vs 휴 -39.6) 🏆">
+            <option value="replay_bc_finetune_2025-03-25.json">2025-03-25 (봄 화, reward -595.5)</option>
+            <option value="replay_bc_finetune_2025-04-18.json">2025-04-18 (봄 금, reward -727.4)</option>
+            <option value="replay_bc_finetune_2025-05-17.json">2025-05-17 (봄 토, reward -348.1)</option>
+            <option value="replay_bc_finetune_2025-07-01.json">2025-07-01 (여름 화, reward -420.3)</option>
+            <option value="replay_bc_finetune_2025-07-06.json">2025-07-06 (여름 일, reward -233.5) ⭐ ✅ 추월!</option>
+            <option value="replay_bc_finetune_2025-07-09.json">2025-07-09 (여름 수, reward -623.2)</option>
+            <option value="replay_bc_finetune_2025-08-21.json">2025-08-21 (여름 목, reward -829.5)</option>
+          </optgroup>
+          <optgroup label="BC v5 (미래 demand) + RL 100k (det. -557.6, vs 휴 -57.6)">
+            <option value="replay_bc_v5_2025-03-25.json">2025-03-25 (봄 화, reward -600.4)</option>
+            <option value="replay_bc_v5_2025-04-18.json">2025-04-18 (봄 금, reward -739.1)</option>
+            <option value="replay_bc_v5_2025-05-17.json">2025-05-17 (봄 토, reward -362.4)</option>
+            <option value="replay_bc_v5_2025-07-01.json">2025-07-01 (여름 화, reward -392.0)</option>
+            <option value="replay_bc_v5_2025-07-06.json">2025-07-06 (여름 일, reward -259.3) ⭐</option>
+            <option value="replay_bc_v5_2025-07-09.json">2025-07-09 (여름 수, reward -704.3)</option>
+            <option value="replay_bc_v5_2025-08-21.json">2025-08-21 (여름 목, reward -845.5)</option>
+          </optgroup>
+          <optgroup label="BC v6 (292일 data) + RL 100k (det. -506.6, vs 휴 -6.6) 🏆🔥">
+            <option value="replay_bc_v6_2025-03-25.json">2025-03-25 (봄 화, reward -569.0) ✅ 추월</option>
+            <option value="replay_bc_v6_2025-04-18.json">2025-04-18 (봄 금, reward -672.8) ✅ 추월</option>
+            <option value="replay_bc_v6_2025-05-17.json">2025-05-17 (봄 토, reward -341.6)</option>
+            <option value="replay_bc_v6_2025-07-01.json">2025-07-01 (여름 화, reward -384.6)</option>
+            <option value="replay_bc_v6_2025-07-06.json">2025-07-06 (여름 일, reward -255.8) ⭐</option>
+            <option value="replay_bc_v6_2025-07-09.json">2025-07-09 (여름 수, reward -598.1)</option>
+            <option value="replay_bc_v6_2025-08-21.json">2025-08-21 (여름 목, reward -724.2) ✅ 추월</option>
+          </optgroup>
+          <optgroup label="BC v7 (오전 피크 가중 ×3) + RL 100k (det. -494.2, vs 휴 +5.8) 🏆🔥🥇 평균 추월!">
+            <option value="replay_bc_v7_peak_2025-03-25.json">2025-03-25 (봄 화, reward -534.5) ✅ 추월</option>
+            <option value="replay_bc_v7_peak_2025-04-18.json">2025-04-18 (봄 금, reward -689.3)</option>
+            <option value="replay_bc_v7_peak_2025-05-17.json">2025-05-17 (봄 토, reward -314.5)</option>
+            <option value="replay_bc_v7_peak_2025-07-01.json">2025-07-01 (여름 화, reward -394.1)</option>
+            <option value="replay_bc_v7_peak_2025-07-06.json">2025-07-06 (여름 일, reward -227.3) ⭐ ✅ 추월</option>
+            <option value="replay_bc_v7_peak_2025-07-09.json">2025-07-09 (여름 수, reward -571.7) ✅ 추월</option>
+            <option value="replay_bc_v7_peak_2025-08-21.json">2025-08-21 (여름 목, reward -728.2) ✅ 추월</option>
+          </optgroup>
+          <optgroup label="[비교] Masked DQN 1M (det. -611.7, 격차 -111.7)">
+            <option value="replay_compare_dqn_2025-03-25.json">2025-03-25 (봄 화, reward -786.6)</option>
+            <option value="replay_compare_dqn_2025-04-18.json">2025-04-18 (봄 금, reward -785.1)</option>
+            <option value="replay_compare_dqn_2025-05-17.json">2025-05-17 (봄 토, reward -396.4)</option>
+            <option value="replay_compare_dqn_2025-07-01.json">2025-07-01 (여름 화, reward -473.1)</option>
+            <option value="replay_compare_dqn_2025-07-06.json">2025-07-06 (여름 일, reward -249.8)</option>
+            <option value="replay_compare_dqn_2025-07-09.json">2025-07-09 (여름 수, reward -721.3)</option>
+            <option value="replay_compare_dqn_2025-08-21.json">2025-08-21 (여름 목, reward -869.5)</option>
+          </optgroup>
+          <optgroup label="[비교] Masked DDQN 1M (det. -603.7, 격차 -103.6) ← DQN 대비 +8.0">
+            <option value="replay_compare_ddqn_2025-03-25.json">2025-03-25 (봄 화, reward -719.2)</option>
+            <option value="replay_compare_ddqn_2025-04-18.json">2025-04-18 (봄 금, reward -801.2)</option>
+            <option value="replay_compare_ddqn_2025-05-17.json">2025-05-17 (봄 토, reward -394.8)</option>
+            <option value="replay_compare_ddqn_2025-07-01.json">2025-07-01 (여름 화, reward -439.6)</option>
+            <option value="replay_compare_ddqn_2025-07-06.json">2025-07-06 (여름 일, reward -263.4)</option>
+            <option value="replay_compare_ddqn_2025-07-09.json">2025-07-09 (여름 수, reward -733.8)</option>
+            <option value="replay_compare_ddqn_2025-08-21.json">2025-08-21 (여름 목, reward -873.6)</option>
+          </optgroup>
         </select>
         <label class="file-label" for="file-input">📁 다른 JSON 로드</label>
         <input id="file-input" class="file-input" type="file" accept=".json" />
@@ -198,7 +382,13 @@
       </span>
     </div>
     <h2 style="margin-top: 10px;">reward 곡선 (전체 episode)</h2>
-    <svg class="curve-svg" id="reward-curve" viewBox="0 0 800 100" preserveAspectRatio="none"></svg>
+    <div class="curve-wrap">
+      <svg class="curve-svg" id="reward-curve" viewBox="0 0 800 100" preserveAspectRatio="none"></svg>
+      <span class="lbl lbl-max" id="curve-lbl-max"></span>
+      <span class="lbl lbl-min" id="curve-lbl-min"></span>
+      <span class="lbl lbl-end" id="curve-lbl-end"></span>
+      <span class="lbl lbl-cur" id="curve-lbl-cur" style="display:none;"></span>
+    </div>
   </div>
 
   <div class="panel">
@@ -280,6 +470,7 @@ function drawStaticMap() {
   // 정류소
   const stationGroup = document.createElementNS("http://www.w3.org/2000/svg", "g");
   stationGroup.id = "stations-group";
+  const tooltipEl = document.getElementById("station-tooltip");
   for (let i = 0; i < data.meta.n_stations; i++) {
     const [x, y] = coordsToXY(data.meta.station_coords[i]);
     const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
@@ -291,9 +482,20 @@ function drawStaticMap() {
     c.setAttribute("fill", "#475569");
     c.setAttribute("stroke", "#0f172a");
     c.setAttribute("stroke-width", "1");
-    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
-    title.textContent = `${data.meta.station_ids[i]}`;
-    c.appendChild(title);
+    c.dataset.idx = i;  // render()에서 갱신할 dataset에 idx 저장
+    // 즉시 반응 tooltip
+    c.addEventListener("mouseenter", e => {
+      const idx = parseInt(e.target.dataset.idx);
+      tooltipEl.innerHTML = e.target.dataset.tooltipHtml || "";
+      tooltipEl.style.display = "block";
+    });
+    c.addEventListener("mousemove", e => {
+      tooltipEl.style.left = (e.clientX + 12) + "px";
+      tooltipEl.style.top = (e.clientY + 12) + "px";
+    });
+    c.addEventListener("mouseleave", () => {
+      tooltipEl.style.display = "none";
+    });
     stationGroup.appendChild(c);
   }
   svg.appendChild(stationGroup);
@@ -342,17 +544,35 @@ function drawStaticMap() {
 function render() {
   if (!data) return;
   const snap = data.snapshots[curIdx];
-  const cap = data.meta.station_capacity;
   const n = data.meta.n_stations;
+  // 새 포맷: station_capacities (배열). 옛 포맷: station_capacity (스칼라) → 배열로 확장.
+  const caps = data.meta.station_capacities
+            || Array(n).fill(data.meta.station_capacity || 20);
 
-  // 정류소 색깔 업데이트
+  // 정류소 색깔 + tooltip 업데이트 + 위급 통계 계산
+  const URGENT_LOW = 0.15, URGENT_HIGH = 0.85;
+  let lowCnt = 0, highCnt = 0, fillSum = 0;
   for (let i = 0; i < n; i++) {
+    const bikes = snap.bikes[i];
+    const cap = caps[i];
+    const ratio = bikes / cap;
+    fillSum += ratio;
+    if (ratio <= URGENT_LOW) lowCnt++;
+    else if (ratio >= URGENT_HIGH) highCnt++;
+
     const el = document.getElementById(`station-${i}`);
-    el.setAttribute("fill", bikeColor(snap.bikes[i], cap));
+    el.setAttribute("fill", bikeColor(bikes, cap));
     // 자전거 비율에 따라 반지름 살짝 변경
-    const r = 3 + (snap.bikes[i] / cap) * 4;
-    el.setAttribute("r", r);
+    el.setAttribute("r", 3 + ratio * 4);
+
+    // tooltip HTML 캐싱 — hover 시 즉시 표시
+    const tag = ratio <= URGENT_LOW ? `<div class="urgent">⚠ 빈 위급</div>`
+              : ratio >= URGENT_HIGH ? `<div class="urgent">⚠ 가득 위급</div>` : "";
+    el.dataset.tooltipHtml = `<span class="id">${data.meta.station_ids[i]}</span><br>남은수량 ${bikes} / 수용가능 ${cap}${tag}`;
   }
+  // 메타 통계 업데이트
+  document.getElementById("m-urgent").textContent = `${lowCnt} / ${highCnt}`;
+  document.getElementById("m-avgfill").textContent = `${(fillSum / n * 100).toFixed(1)}%`;
 
   // 트럭 위치
   for (let i = 0; i < data.meta.n_trucks; i++) {
@@ -495,6 +715,23 @@ function drawRewardCurve(highlight = -1) {
     svg.innerHTML += `<line x1="${x}" y1="0" x2="${x}" y2="${H}" stroke="#fbbf24" stroke-width="1" />`;
     svg.innerHTML += `<circle cx="${x}" cy="${y}" r="4" fill="#fbbf24" />`;
   }
+
+  // 수치 라벨 (HTML overlay — SVG preserveAspectRatio=none이라 SVG text가 stretch되어 안 씀)
+  document.getElementById("curve-lbl-max").textContent = mx.toFixed(0);
+  document.getElementById("curve-lbl-min").textContent = mn.toFixed(0);
+  const endVal = snaps[snaps.length - 1].cum_reward;
+  document.getElementById("curve-lbl-end").textContent = `end ${endVal.toFixed(1)}`;
+  const curEl = document.getElementById("curve-lbl-cur");
+  if (highlight >= 0) {
+    const curVal = snaps[highlight].cum_reward;
+    const pct = (highlight / (snaps.length - 1)) * 100;
+    curEl.textContent = curVal.toFixed(1);
+    curEl.style.left = pct + "%";
+    curEl.style.top = "2px";
+    curEl.style.display = "block";
+  } else {
+    curEl.style.display = "none";
+  }
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -574,13 +811,14 @@ function appendLog(html) {
 }
 
 // ════════════════════════════════════════════════════════════════
-// 자동 로드 (replay.json 같은 폴더에 있을 때)
-fetch("replay.json")
-  .then(r => r.ok ? r.json() : Promise.reject("no replay.json"))
+// 자동 로드 — 페이지 진입 시 best 결과(2025-07-06)를 띄움
+const DEFAULT_REPLAY = "replay_2025-07-06.json";
+fetch(DEFAULT_REPLAY)
+  .then(r => r.ok ? r.json() : Promise.reject(`no ${DEFAULT_REPLAY}`))
   .then(loadData)
   .catch(err => {
-    appendLog(`<span class="bad">⚠ replay.json 자동 로드 실패: ${err}</span>`);
-    appendLog(`<span class="ts">→ '📁 다른 JSON 로드' 버튼으로 수동 선택하세요.</span>`);
+    appendLog(`<span class="bad">⚠ ${DEFAULT_REPLAY} 자동 로드 실패: ${err}</span>`);
+    appendLog(`<span class="ts">→ 위 셀렉터나 '📁 다른 JSON 로드' 버튼으로 선택하세요.</span>`);
   });
 </script>
 </body>

@@ -283,6 +283,47 @@ mask는 다른 트럭 destination 차단만 유지, **위급 정류소 제한은
 
 원인: 다양성 ↑↑ → 학습 신호 dilute, timesteps 부족. 곡선이 끝에서 회복 추세지만 미달.
 
+### Phase 10 — 공정 evaluation + multi-seed baseline (Step 1)
+
+평가 환경에서 shaping (`urgent_bonus`, `explore_bonus`) 을 OFF → 휴리스틱과 절대값 비교 가능한 **공정 metric** 으로 전환. (학습 환경은 그대로 shaping ON)
+
+- 1년치 데이터, 2M timesteps, masked DQN × {DQN, DDQN} × 3 seed (42/123/777)
+- 공정 eval 휴리스틱 ≈ **-106**
+
+| group | n | best (mean±std) | final (mean±std) |
+|---|---|---|---|
+| baseline DQN | 3 | **-275.75 ± 17.62** | -413.71 ± 37.59 |
+| baseline DDQN | 3 | **-276.91 ± 28.55** | -406.54 ± 50.24 |
+
+→ 공정 metric 기준 휴리스틱 한참 미달, best 이후 발산 패턴 재확인. DDQN 우위 없음.
+
+### Phase 11 — Potential-based shaping (Step 2)
+
+Ng et al. (1999) **policy-invariant** shaping 추가:
+
+```
+r_shaped += scale × (γ·Φ(s') − Φ(s))
+Φ(s)  = -Σ |bikes_i − capacity_i × target_fill_ratio|
+scale = 0.1, γ = 0.99
+```
+
+평가 환경은 여전히 shaping OFF (공정 metric, 휴리스틱과 직접 비교 위해). 동일 설정 (DQN/DDQN × 3 seed × 2M).
+
+| group | n | best (mean±std) | final (mean±std) |
+|---|---|---|---|
+| +shaping DQN | 3 | **-281.63 ± 27.31** | -416.01 ± 53.03 |
+| +shaping DDQN | 3 | **-279.00 ± 21.69** | -411.20 ± 53.82 |
+
+**Shaping Δ (Step2 − Step1, best):**
+- DQN: **-5.88** (소폭 악화)
+- DDQN: **-2.08** (소폭 악화)
+- std (~20~28) 가 효과 크기(~2~6) 보다 훨씬 큼 → **noise 수준, 통계적 무의미**
+- Step2 내 DDQN vs DQN paired t = 0.81, **p = 0.50** → 차이 없음
+
+curve: `docs/step2_curve.png`
+
+**결론:** potential-based shaping 으로는 휴리스틱 미달 문제가 해결되지 않음. Φ 가 충분히 informative 하지 않거나 (단순 |bikes−target| 합), scale=0.1 이 학습 신호에 묻혀버린 듯. 본질적 한계는 다른 곳에 있다고 판단.
+
 ---
 
 ## 4. 실험 결과 표
@@ -297,6 +338,12 @@ mask는 다른 트럭 destination 차단만 유지, **위급 정류소 제한은
 | 5 | `mapo_explore_v1` | + exploration↑ + visit count | 300k | +91.67 | +49.96 | -41.7 ❌ |
 | 6 | **`mapo_open_v1`** ⭐ | strict_mask 제거 | 300k | +128.22 | **+166.7** | **+38.5 ✅** |
 | 7 | `mapo_year_v1` | + 1년치 데이터 (60일 train) | 500k | +238.32 | -141.7 | -380 ❌ |
+| 8 | `step1_dqn` × 3 seed | 공정 eval (shaping OFF) + 2M | 2M | -106 (공정) | -275.75 ± 17.62 | -170 ❌ |
+| 9 | `step1_ddqn` × 3 seed | + Double Q | 2M | -106 (공정) | -276.91 ± 28.55 | -171 ❌ |
+| 10 | `step2_dqn` × 3 seed | + potential-based shaping (0.1) | 2M | -106 (공정) | -281.63 ± 27.31 | -176 ❌ |
+| 11 | `step2_ddqn` × 3 seed | + shaping + Double Q | 2M | -106 (공정) | -279.00 ± 21.69 | -173 ❌ |
+
+> ⚠️ #8 이후의 휴리스틱 값(-106)은 **공정 eval (shaping OFF)** 이라 #6 (+128) 과 직접 비교 불가. Δ 만 의미 있음.
 
 ---
 
@@ -324,6 +371,9 @@ best가 final과 같다 = **계속 학습하면 더 좋아질 가능성**.
 
 ### 5.5 데이터 다양성 ↑ → timesteps도 더 필요
 v6에서 train 60일 (다양한 계절) + 500k step → episode당 ~8k step만 노출. v5와 같은 episode 노출 수준이 되려면 1.5M~2M step 필요할 것으로 추정.
+
+### 5.6 단순 potential shaping 으로는 부족 (Step 2)
+`Φ(s) = -Σ|bikes − target|` 의 잠재함수 + scale 0.1 로는 noise 수준 (Δ ≈ -2 ~ -6, std ≈ 20~28). policy-invariant 라 해 끼치진 않지만 의미 있는 개선도 없음. 휴리스틱 미달의 본질은 shaping 부재가 아니라 다른 곳 (탐색, off-policy 발산, Φ 설계 자체) 에 있다고 판단.
 
 ---
 
@@ -503,10 +553,10 @@ evaluation:
 
 | 우선순위 | 항목 | 효과 |
 |---|---|---|
-| 🔴 높음 | `year_v1` 더 길게 (1.5M~2M step) | 학습 곡선이 우상승 추세 → 휴리스틱 추격 |
+| 🔴 높음 | shaping_scale 크게 (0.5~1.0) 또는 Φ 재설계 (위급 정류소 거리 기반) | Step 2 가 noise 수준이라 신호 강도/정보량 둘 다 점검 |
+| 🔴 높음 | Behavior Cloning warm-up | 휴리스틱 transition을 buffer에 미리 주입 → cold start 해결 |
 | 🟡 중간 | Stay penalty schedule (초기 활발, 후기 신중) | 학습 초반 다양한 시도 강제 |
-| 🟡 중간 | Behavior Cloning warm-up | 휴리스틱 transition을 buffer에 미리 주입 → cold start 해결 |
-| 🟢 낮음 | Dueling DQN / PPO 비교 | 알고리즘 ablation (Phase 5 in main README) |
+| 🟡 중간 | PPO / Dueling DQN 비교 | off-policy 발산이 본질이라면 on-policy 가 답일 수 있음 |
 | 🟢 낮음 | 다중 권역 확장 (영등포·강남) | 다른 권역에서도 작동하는지 |
 
 ---

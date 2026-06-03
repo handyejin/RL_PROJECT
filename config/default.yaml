@@ -1,67 +1,47 @@
-# ============================================================
-# 따릉이 재배치 RL — 기본 설정 (현재 권장 = open_v1 + 1년치)
-# ============================================================
-# 사용:
-#   python scripts/train.py                              # 이 config 사용
-#   python scripts/train.py --config configs/exp1.yaml   # 다른 config
-#   python scripts/train.py --tag mytag --timesteps 1M   # CLI로 override
-#
-# 우선순위: CLI 인자 > yaml > argparse default
-# ============================================================
-
-# --- 권역 ---
-district: "마포구"
-
-# --- 트럭 ---
+district: 마포구
 truck:
   n_trucks: 3
-  # capacity, speed_kmh 등은 RebalanceEnv 기본값 사용 (참고용)
   capacity: 20
   speed_kmh: 25.0
-
-# --- 보상 가중치 (RebalanceEnv) ---
+  target_fill_ratio: 0.5
 reward:
-  # stockout/full은 환경 기본값 사용 (-1.0 / -0.8)
   stockout: -1.0
   full: -0.8
-  # 이동 비용은 CLI로 전달
-  travel_km: -0.008          # --w-travel-km
-  travel_step: -0.002        # --w-travel-step
-
-# --- SMDP 트리거 + Reward shaping ---
+  travel_km: -0.008
+  travel_step: -0.002
 env:
-  urgent_low: 0.15           # 빈 위급 임계치 (--urgent-low)
-  urgent_high: 0.85          # 가득 위급 임계치 (--urgent-high)
-  urgent_bonus: 2.0          # 위급 정류소 도착 보너스 (--urgent-bonus)
-  explore_bonus: 0.3         # 방문 빈도 보너스 스케일 (--explore-bonus)
-  strict_urgent_mask: false  # 위급 정류소만 action 허용 (--strict-mask)
-
-# --- 알고리즘 ---
+  urgent_low: 0.15
+  urgent_high: 0.85
+  urgent_bonus: 5.0
+  explore_bonus: 1.0
+  strict_urgent_mask: true
+  shaping_scale: 0.5
+  w_work_per_bike: 0.0
+  w_idle_visit: 0.0
+  future_demand_horizon: 0
 algorithm:
-  name: "masked_dqn"         # "dqn" 또는 "masked_dqn"
-  double_q: false             # Double DQN 타깃 사용
-
-# --- DQN 하이퍼파라미터 ---
+  name: masked_dqn
+  double_q: true
 dqn:
   learning_rate: 0.0001
+  lr_decay: true
   buffer_size: 100000
   batch_size: 64
   gamma: 0.99
   exploration_fraction: 0.6
   exploration_final_eps: 0.15
+  learning_starts: 20000
   target_update_interval: 1000
   train_freq: 4
   gradient_steps: 1
-  net_arch: [256, 256]
-
-# --- 학습 ---
+  net_arch:
+  - 256
+  - 256
 training:
-  timesteps: 500000          # --timesteps
-  eval_freq: 10000           # --eval-freq
-  n_train_dates: 60          # --n-train-dates (1년 random shuffle에서 추출)
-  seed: 42                   # --seed
-  tag: "default"             # --tag (로그 디렉토리 구분)
-
-# --- 평가 ---
+  timesteps: 1000000
+  eval_freq: 10000
+  n_train_dates: 60
+  seed: 42
+  tag: default
 evaluation:
-  shaping: false             # --eval-shaping (기본 OFF — 공정 metric)
+  shaping: false

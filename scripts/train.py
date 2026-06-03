@@ -125,8 +125,10 @@ class MaskedEvalCallback(BaseCallback):
         rewards = []
         env = self.eval_env
         base = env.env if hasattr(env, "env") else env  # Monitor → underlying env
-        for _ in range(self.n_eval_episodes):
-            obs, _ = env.reset()
+        n_eps = min(self.n_eval_episodes, len(base._episodes))
+        for ep_idx in range(n_eps):
+            # episode를 명시 선택 (deterministic 평가) + 고정 seed
+            obs, _ = env.reset(seed=42, options={"episode_idx": ep_idx})
             done = False
             total = 0.0
             while not done:
@@ -159,6 +161,8 @@ class MaskedEvalCallback(BaseCallback):
 def evaluate_heuristic(
     eval_episodes: list,
     n_trucks: int = 3,
+    truck_capacity: int = 20,
+    target_fill_ratio: float = 0.5,
     seed: int = 42,
     urgent_low_ratio: float = 0.0,
     urgent_high_ratio: float = 1.0,
@@ -167,6 +171,10 @@ def evaluate_heuristic(
     w_travel_km: float = -0.01,
     w_travel_step: float = -0.005,
     explore_bonus_scale: float = 0.0,
+    shaping_scale: float = 0.0,
+    w_work_per_bike: float = 0.0,
+    w_idle_visit: float = 0.0,
+    future_demand_horizon: int = 0,
 ) -> float:
     """eval set에 대해 most_imbalanced 휴리스틱의 평균 reward 측정 (DQN 비교 기준).
 
@@ -176,7 +184,8 @@ def evaluate_heuristic(
     rewards = []
     for ep in eval_episodes:
         env = RebalanceEnv(
-            ep, n_trucks=n_trucks,
+            ep, n_trucks=n_trucks, truck_capacity=truck_capacity,
+            target_fill_ratio=target_fill_ratio,
             urgent_low_ratio=urgent_low_ratio,
             urgent_high_ratio=urgent_high_ratio,
             urgent_bonus=urgent_bonus,
@@ -184,6 +193,10 @@ def evaluate_heuristic(
             w_travel_km=w_travel_km,
             w_travel_step=w_travel_step,
             explore_bonus_scale=explore_bonus_scale,
+            shaping_scale=shaping_scale,
+            w_work_per_bike=w_work_per_bike,
+            w_idle_visit=w_idle_visit,
+            future_demand_horizon=future_demand_horizon,
         )
         env.reset(seed=seed)
         total = 0.0
@@ -198,6 +211,8 @@ def evaluate_heuristic(
 def build_env(
     episodes,
     n_trucks: int,
+    truck_capacity: int = 20,
+    target_fill_ratio: float = 0.5,
     seed: int | None = None,
     monitor_dir: Path | None = None,
     use_action_mask: bool = True,
@@ -208,10 +223,18 @@ def build_env(
     w_travel_km: float = -0.01,
     w_travel_step: float = -0.005,
     explore_bonus_scale: float = 0.0,
+    shaping_scale: float = 0.0,
+    w_work_per_bike: float = 0.0,
+    w_idle_visit: float = 0.0,
+    future_demand_horizon: int = 0,
 ):
     env = RebalanceEnv(
-        episodes, n_trucks=n_trucks, seed=seed,
+        episodes, n_trucks=n_trucks, truck_capacity=truck_capacity,
+        target_fill_ratio=target_fill_ratio, seed=seed,
         use_action_mask=use_action_mask,
+        w_work_per_bike=w_work_per_bike,
+        w_idle_visit=w_idle_visit,
+        future_demand_horizon=future_demand_horizon,
         urgent_low_ratio=urgent_low_ratio,
         urgent_high_ratio=urgent_high_ratio,
         urgent_bonus=urgent_bonus,
@@ -219,6 +242,7 @@ def build_env(
         w_travel_km=w_travel_km,
         w_travel_step=w_travel_step,
         explore_bonus_scale=explore_bonus_scale,
+        shaping_scale=shaping_scale,
     )
     if monitor_dir is not None:
         monitor_dir.mkdir(parents=True, exist_ok=True)
@@ -273,6 +297,15 @@ def main() -> None:
     parser.add_argument("--district", default=_get(cfg, "district", default="마포구"))
     parser.add_argument("--n-trucks", type=int,
                         default=_get(cfg, "truck", "n_trucks", default=3))
+    parser.add_argument("--truck-capacity", type=int,
+                        default=_get(cfg, "truck", "capacity", default=20),
+                        help="트럭 1대 적재 한도 (자전거 수)")
+    parser.add_argument("--target-fill-ratio", type=float,
+                        default=_get(cfg, "truck", "target_fill_ratio", default=0.5),
+                        help="정류소를 capacity의 몇 비율로 채울지 (적재/하차 기준)")
+    parser.add_argument("--lr-decay", action="store_true",
+                        default=_get(cfg, "dqn", "lr_decay", default=False),
+                        help="lr을 학습 진행에 따라 linear decay")
     parser.add_argument("--timesteps", type=int,
                         default=_get(cfg, "training", "timesteps", default=100_000))
     parser.add_argument("--eval-freq", type=int,
@@ -289,6 +322,9 @@ def main() -> None:
                         default=_get(cfg, "dqn", "exploration_fraction", default=0.3))
     parser.add_argument("--exploration-final-eps", type=float,
                         default=_get(cfg, "dqn", "exploration_final_eps", default=0.05))
+    parser.add_argument("--learning-starts", type=int,
+                        default=_get(cfg, "dqn", "learning_starts", default=1000),
+                        help="첫 N step은 ε=1.0 random — replay buffer 다양화")
     parser.add_argument("--seed", type=int,
                         default=_get(cfg, "training", "seed", default=42))
     parser.add_argument("--tag", default=_get(cfg, "training", "tag", default="run1"),
@@ -317,9 +353,23 @@ def main() -> None:
     parser.add_argument("--explore-bonus", type=float,
                         default=_get(cfg, "env", "explore_bonus", default=0.0),
                         help="방문 빈도 기반 탐색 보너스 스케일")
+    parser.add_argument("--shaping-scale", type=float,
+                        default=_get(cfg, "env", "shaping_scale", default=0.0),
+                        help="Potential-based shaping 스케일 (0=꺼짐). Φ(s)=-Σ|bikes-target|")
+    parser.add_argument("--w-work", type=float,
+                        default=_get(cfg, "env", "w_work_per_bike", default=0.0),
+                        help="적재/하차 1대당 양수 reward")
+    parser.add_argument("--w-idle", type=float,
+                        default=_get(cfg, "env", "w_idle_visit", default=0.0),
+                        help="적정 정류소 도착했는데 0대 옮긴 경우 페널티")
+    parser.add_argument("--future-demand-horizon", type=int,
+                        default=_get(cfg, "env", "future_demand_horizon", default=0),
+                        help="0=비활성. >0이면 향후 N step net demand obs 포함")
     parser.add_argument("--eval-shaping", action="store_true",
                         default=_get(cfg, "evaluation", "shaping", default=False),
                         help="평가 환경에 shaping 적용. 기본 OFF (공정 metric)")
+    parser.add_argument("--pretrain", default=None,
+                        help="BC pretrain zip 경로. 지정 시 RL 시작 전 q_net 가중치 로드")
     args = parser.parse_args()
 
     log_root = PROJECT_ROOT / "logs" / f"{args.algo}_{args.tag}"
@@ -351,12 +401,20 @@ def main() -> None:
     # 평가 환경: 기본은 shaping 제거 (공정 metric). --eval-shaping이면 학습과 동일.
     eval_urgent_bonus = args.urgent_bonus if args.eval_shaping else 0.0
     eval_explore_bonus = args.explore_bonus if args.eval_shaping else 0.0
+    # Potential-based shaping은 policy-invariant라 평가에 켜도 정책 우열 안 바뀜.
+    # 다만 reward 절대값이 달라 휴리스틱과 직접 비교 위해 평가 시 OFF (공정 metric).
+    eval_shaping_scale = args.shaping_scale if args.eval_shaping else 0.0
     heuristic_reward = evaluate_heuristic(
-        eval_episodes, n_trucks=args.n_trucks, seed=args.seed,
+        eval_episodes, n_trucks=args.n_trucks, truck_capacity=args.truck_capacity,
+        target_fill_ratio=args.target_fill_ratio, seed=args.seed,
         urgent_low_ratio=args.urgent_low, urgent_high_ratio=args.urgent_high,
         urgent_bonus=eval_urgent_bonus, strict_urgent_mask=args.strict_mask,
         w_travel_km=args.w_travel_km, w_travel_step=args.w_travel_step,
         explore_bonus_scale=eval_explore_bonus,
+        shaping_scale=eval_shaping_scale,
+        w_work_per_bike=args.w_work,
+        w_idle_visit=args.w_idle,
+        future_demand_horizon=args.future_demand_horizon,
     )
     print(f"  most_imbalanced mean reward: {heuristic_reward:.2f}  ({time.time()-t0:.1f}s)")
 
@@ -364,7 +422,8 @@ def main() -> None:
     use_mask = not args.no_action_mask
     print(f"  환경 설정: urgent_low={args.urgent_low}, urgent_high={args.urgent_high}, "
           f"urgent_bonus={args.urgent_bonus}, strict_mask={args.strict_mask}, "
-          f"w_travel_km={args.w_travel_km}, w_travel_step={args.w_travel_step}")
+          f"w_travel_km={args.w_travel_km}, w_travel_step={args.w_travel_step}, "
+          f"shaping_scale={args.shaping_scale}")
     train_env_kwargs = dict(
         urgent_low_ratio=args.urgent_low,
         urgent_high_ratio=args.urgent_high,
@@ -373,39 +432,56 @@ def main() -> None:
         w_travel_km=args.w_travel_km,
         w_travel_step=args.w_travel_step,
         explore_bonus_scale=args.explore_bonus,
+        shaping_scale=args.shaping_scale,
+        w_work_per_bike=args.w_work,
+        w_idle_visit=args.w_idle,
+        future_demand_horizon=args.future_demand_horizon,
     )
     # 평가는 기본 shaping OFF (순수 metric) — --eval-shaping이면 학습과 동일
     eval_env_kwargs = {**train_env_kwargs,
                        "urgent_bonus": eval_urgent_bonus,
-                       "explore_bonus_scale": eval_explore_bonus}
+                       "explore_bonus_scale": eval_explore_bonus,
+                       "shaping_scale": eval_shaping_scale}
     print(f"  평가 환경: urgent_bonus={eval_env_kwargs['urgent_bonus']}, "
-          f"explore_bonus={eval_env_kwargs['explore_bonus_scale']} "
+          f"explore_bonus={eval_env_kwargs['explore_bonus_scale']}, "
+          f"shaping_scale={eval_env_kwargs['shaping_scale']} "
           f"({'shaping OFF — 공정 metric' if not args.eval_shaping else 'shaping ON'})")
 
     train_env = build_env(
-        train_episodes, args.n_trucks, seed=args.seed,
+        train_episodes, args.n_trucks, truck_capacity=args.truck_capacity,
+        target_fill_ratio=args.target_fill_ratio,
+        seed=args.seed,
         monitor_dir=log_root / "monitor", use_action_mask=use_mask,
         **train_env_kwargs,
     )
     eval_env = build_env(
-        eval_episodes, args.n_trucks, seed=args.seed + 1, use_action_mask=use_mask,
+        eval_episodes, args.n_trucks, truck_capacity=args.truck_capacity,
+        target_fill_ratio=args.target_fill_ratio,
+        seed=args.seed + 1, use_action_mask=use_mask,
         **eval_env_kwargs,
     )
 
     # 모델
     print(f"\n[3/4] training {algo_label}...")
+    # lr decay: progress 1.0→0.0이지만 0.1로 clamp (끝까지 lr=0.1×base 유지)
+    if args.lr_decay:
+        lr_base = args.lr
+        lr_schedule = lambda progress: lr_base * max(0.1, progress)
+        print(f"  lr_decay ON: {lr_base:.1e} → {lr_base*0.1:.1e} (linear, clamp 0.1)")
+    else:
+        lr_schedule = args.lr
     common_kwargs = dict(
-        learning_rate=args.lr,
+        learning_rate=lr_schedule,
         buffer_size=args.buffer_size,
         batch_size=args.batch_size,
         gamma=args.gamma,
         exploration_fraction=args.exploration_fraction,
         exploration_final_eps=args.exploration_final_eps,
-        learning_starts=1000,
+        learning_starts=args.learning_starts,
         target_update_interval=1000,
         train_freq=4,
         gradient_steps=1,
-        policy_kwargs={"net_arch": [256, 256]},
+        policy_kwargs={"net_arch": list(_get(cfg, "dqn", "net_arch", default=[256, 256]))},
         tensorboard_log=str(tb_dir),
         verbose=0,
         seed=args.seed,
@@ -414,6 +490,19 @@ def main() -> None:
         model = MaskableDQN("MlpPolicy", train_env, double_q=args.double_q, **common_kwargs)
     else:
         model = DQN("MlpPolicy", train_env, **common_kwargs)
+
+    # BC pretrain 가중치 로드 — q_net & q_net_target 둘 다 (target도 같은 시작점)
+    if args.pretrain:
+        import torch
+        from stable_baselines3.common.save_util import load_from_zip_file
+        print(f"  [pretrain] loading {args.pretrain}")
+        _, params, _ = load_from_zip_file(args.pretrain)
+        state = params["policy"]
+        # 'q_net.*' 키만 추출
+        q_net_state = {k[len("q_net."):]: v for k, v in state.items() if k.startswith("q_net.")}
+        model.policy.q_net.load_state_dict(q_net_state)
+        model.policy.q_net_target.load_state_dict(q_net_state)
+        print(f"  [pretrain] loaded q_net ({len(q_net_state)} tensors)")
 
     history: list[dict] = []
     if args.algo == "masked_dqn":

@@ -21,6 +21,7 @@ env/
 
 # Data (too large for git)
 data/*.csv
+data/*.xlsx
 data/processed/
 
 # Logs / artifacts

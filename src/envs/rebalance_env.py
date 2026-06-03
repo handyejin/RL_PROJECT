@@ -63,6 +63,11 @@ class RebalanceEnv(gym.Env):
         urgent_bonus: float = 0.0,        # 위급 정류소 도착 시 보너스 reward (shaping)
         strict_urgent_mask: bool = False, # True: 위급 정류소만 action 가능 (자기 위치 포함)
         explore_bonus_scale: float = 0.0, # 방문 빈도 기반 탐색 보너스 (count 적은 정류소 +)
+        shaping_scale: float = 0.0,       # Potential-based shaping 스케일. 0=꺼짐.
+        shaping_gamma: float = 0.99,      # shaping에 쓰는 γ (DQN gamma와 일치 권장)
+        w_work_per_bike: float = 0.0,     # 적재/하차 1대당 양수 reward
+        w_idle_visit: float = 0.0,        # 도착했는데 0대 옮긴 경우 페널티 (양수로 설정 → 음수로 적용)
+        future_demand_horizon: int = 0,   # 0이면 비활성, >0이면 향후 N step 정류소별 net demand를 obs에 포함
         seed: int | None = None,
     ):
         super().__init__()
@@ -90,11 +95,20 @@ class RebalanceEnv(gym.Env):
         self.urgent_bonus = urgent_bonus
         self.strict_urgent_mask = strict_urgent_mask
         self.explore_bonus_scale = explore_bonus_scale
+        self.shaping_scale = shaping_scale
+        self.shaping_gamma = shaping_gamma
+        self.w_work_per_bike = w_work_per_bike
+        self.w_idle_visit = w_idle_visit
         self.cum_urgent_bonus: float = 0.0
         self.cum_explore_bonus: float = 0.0
+        self.cum_shaping: float = 0.0
+        self.cum_work: float = 0.0
+        self._last_potential: float = 0.0
         # visit_count는 reset에서 초기화
 
         self.action_space = spaces.Discrete(self.N)
+        # 미래 demand horizon: 0이면 비활성, >0이면 향후 N step의 정류소별 net flow를 obs에 추가
+        self.future_demand_horizon = future_demand_horizon
         obs_dim = (
             self.N                    # 정류소 자전거 비율
             + self.n_trucks            # 트럭 위치 idx 정규화
@@ -104,6 +118,7 @@ class RebalanceEnv(gym.Env):
             + 4                        # sin/cos hour & day-of-episode
             + 5                        # 캘린더: sin/cos(dow), is_weekend, is_holiday, is_holiday_eve
             + 4                        # 날씨: temp, precip, wind, humidity (정규화)
+            + (self.N if self.future_demand_horizon > 0 else 0)  # 미래 demand (옵션)
         )
         self.observation_space = spaces.Box(
             low=-1.0, high=1.0, shape=(obs_dim,), dtype=np.float32
@@ -130,8 +145,11 @@ class RebalanceEnv(gym.Env):
         if seed is not None:
             self._rng = np.random.default_rng(seed)
 
-        # 매 reset마다 episode 회전 (단일 episode면 그대로)
-        if len(self._episodes) > 1:
+        # episode 선택: options에 episode_idx가 있으면 명시 선택 (deterministic 평가용),
+        # 아니면 random 회전 (학습 시 다양한 날짜 노출)
+        if options and "episode_idx" in options:
+            self.data = self._episodes[options["episode_idx"]]
+        elif len(self._episodes) > 1:
             idx = int(self._rng.integers(len(self._episodes)))
             self.data = self._episodes[idx]
 
@@ -148,7 +166,10 @@ class RebalanceEnv(gym.Env):
         self.cum_travel_steps = 0
         self.cum_urgent_bonus = 0.0
         self.cum_explore_bonus = 0.0
+        self.cum_shaping = 0.0
+        self.cum_work = 0.0
         self.visit_count = np.zeros(self.N, dtype=np.int32)
+        self._last_potential = self._potential()
 
         # episode 시작 시점에는 모든 트럭이 idle → 0번 트럭부터 결정
         self.current_truck = 0
@@ -181,10 +202,28 @@ class RebalanceEnv(gym.Env):
         reward_advance, done = self._advance_until_next_decision()
         reward += reward_advance
 
+        # 3) Potential-based reward shaping (Ng et al. 1999, policy invariance 보장)
+        #    shaped = γ·Φ(s') − Φ(s), Φ(s) = -Σ|bikes - target|
+        if self.shaping_scale != 0.0:
+            phi_now = self._potential()
+            shaped = self.shaping_gamma * phi_now - self._last_potential
+            reward += self.shaping_scale * shaped
+            self.cum_shaping += self.shaping_scale * shaped
+            self._last_potential = phi_now
+
         truncated = False
         obs = self._get_obs()
         info = self._info()
         return obs, float(reward), done, truncated, info
+
+    def _potential(self) -> float:
+        """Φ(s) = -Σ|bikes_i - target_i|. 균형 잡힐수록 0에 가까움 (최대값=0).
+
+        Potential-based reward shaping의 잠재함수.
+        모든 정류소가 capacity*target_fill_ratio에 가까울수록 좋은 상태.
+        """
+        target = self.data.capacity.astype(np.float32) * self.target_fill_ratio
+        return float(-np.sum(np.abs(self.bikes.astype(np.float32) - target)))
 
     # ------------------------------------------------------------------
     # 내부 시뮬레이션
@@ -293,16 +332,23 @@ class RebalanceEnv(gym.Env):
             explore = self.explore_bonus_scale / float(np.sqrt(self.visit_count[s]))
             self.cum_explore_bonus += explore
 
+        qty_moved = 0  # 실제 옮긴 자전거 수 (적재/하차 통합)
         if current > target:
-            qty = min(current - target, self.truck_capacity - truck.load)
-            self.bikes[s] -= qty
-            truck.load += qty
+            qty_moved = min(current - target, self.truck_capacity - truck.load)
+            self.bikes[s] -= qty_moved
+            truck.load += qty_moved
         elif current < target:
-            qty = min(target - current, truck.load, self.data.capacity[s] - current)
-            self.bikes[s] += qty
-            truck.load -= qty
+            qty_moved = min(target - current, truck.load, self.data.capacity[s] - current)
+            self.bikes[s] += qty_moved
+            truck.load -= qty_moved
 
-        return urgent + explore
+        # work reward: 옮긴 양에 비례한 양수, 허탕(qty=0) 시 페널티
+        work = self.w_work_per_bike * qty_moved
+        if qty_moved == 0:
+            work -= self.w_idle_visit
+        self.cum_work += work
+
+        return urgent + explore + work
 
     # ------------------------------------------------------------------
     # Observation / Info
@@ -356,16 +402,33 @@ class RebalanceEnv(gym.Env):
         else:
             weather_enc = np.zeros(4, dtype=np.float32)
 
-        return np.concatenate(
-            [bike_ratio, loc_norm, load_ratio, rem_norm, cur_onehot, time_enc, cal_enc, weather_enc]
-        )
+        parts = [bike_ratio, loc_norm, load_ratio, rem_norm, cur_onehot,
+                 time_enc, cal_enc, weather_enc]
+
+        # 미래 demand 인코딩 — horizon>0일 때만 포함 (옵션)
+        if self.future_demand_horizon > 0:
+            H = self.future_demand_horizon
+            t_end = min(self.t + H, self.T)
+            if t_end > self.t:
+                future_rent = self.data.rentals[self.t:t_end].sum(axis=0)
+                future_ret = self.data.returns[self.t:t_end].sum(axis=0)
+                future_net = (future_ret - future_rent).astype(np.float32)
+                cap_f = self.data.capacity.astype(np.float32)
+                future_net_norm = future_net / np.maximum(cap_f, 1.0)
+                future_enc = np.clip(future_net_norm, -1.0, 1.0)
+            else:
+                future_enc = np.zeros(self.N, dtype=np.float32)
+            parts.append(future_enc)
+
+        return np.concatenate(parts)
 
     def action_masks(self) -> np.ndarray:
         """이동 가능한 정류소 마스크. sb3-contrib 컨벤션.
 
-        - 자기 현재 위치는 허용 (머무름 = stay 1 step).
+        - 자기 현재 위치(stay)는 기본 차단 — trivial stay 솔루션 회피.
         - 다른 트럭이 in-flight로 향하고 있는 목적지는 차단 (중복 작업 회피).
-        - strict_urgent_mask=True면 위급 정류소만 허용 (+ 자기 위치).
+        - strict_urgent_mask=True면 위급 정류소만 허용.
+        - 안전장치: 갈 곳이 정말 없을 때만 자기 위치 fallback.
         - use_action_mask=False면 항상 all-ones.
         """
         mask = np.ones(self.N, dtype=bool)
@@ -376,18 +439,20 @@ class RebalanceEnv(gym.Env):
                 continue
             mask[tr.destination] = False
 
-        # strict 모드: 위급 정류소만 가능 (자기 위치 stay는 항상 허용)
+        # 자기 위치 stay 차단 — trivial 솔루션(한 곳에 모여 영원히 머무름) 직접 회피
+        self_loc = self.trucks[self.current_truck].location
+        mask[self_loc] = False
+
+        # strict 모드: 위급 정류소만 가능
         if self.strict_urgent_mask:
             cap = self.data.capacity
             ratio = self.bikes / np.maximum(cap, 1)
             urgent = (ratio <= self.urgent_low_ratio) | (ratio >= self.urgent_high_ratio)
-            self_loc = self.trucks[self.current_truck].location
             mask &= urgent
-            mask[self_loc] = True  # 자기 위치(stay)는 항상 허용
 
-        # 안전장치: 모두 막혔으면 자기 위치는 강제 허용
+        # 안전장치: 모두 막혔으면 자기 위치는 강제 허용 (fallback)
         if not mask.any():
-            mask[self.trucks[self.current_truck].location] = True
+            mask[self_loc] = True
         return mask
 
     # 구버전 호환 alias
@@ -403,4 +468,6 @@ class RebalanceEnv(gym.Env):
             "cum_travel_steps": self.cum_travel_steps,
             "cum_urgent_bonus": round(self.cum_urgent_bonus, 3),
             "cum_explore_bonus": round(self.cum_explore_bonus, 3),
+            "cum_shaping": round(self.cum_shaping, 3),
+            "cum_work": round(self.cum_work, 3),
         }
