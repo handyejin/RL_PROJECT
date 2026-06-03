@@ -1,0 +1,1163 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>따릉이 RL 프로젝트 — 소스 가이드</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #273449;
+    --accent: #38bdf8;
+    --accent-2: #fbbf24;
+    --good: #4ade80;
+    --bad: #f87171;
+    --purple: #a855f7;
+    --pink: #ec4899;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --border: #334155;
+    --code-bg: #0a1224;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font-family: -apple-system, "Pretendard", "Apple SD Gothic Neo", sans-serif;
+         font-size: 13px; line-height: 1.5; }
+
+  /* ── Layout ── */
+  .topbar {
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    padding: 12px 20px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .topbar h1 { font-size: 16px; margin: 0; color: var(--accent); }
+  .tabs { display: flex; gap: 4px; margin-left: auto; }
+  .tab {
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 14px; border-radius: 6px;
+    cursor: pointer; font-family: inherit; font-size: 12px;
+  }
+  .tab.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .tab:hover:not(.active) { background: var(--border); }
+
+  .search-box {
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); padding: 6px 10px; border-radius: 6px;
+    font-family: inherit; font-size: 12px; width: 200px;
+  }
+  .search-box:focus { outline: none; border-color: var(--accent); }
+
+  .container { display: flex; height: calc(100vh - 56px); }
+
+  /* ── Sidebar (file tree) ── */
+  .sidebar {
+    width: 280px; min-width: 280px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 12px;
+  }
+  .tree-section { margin-bottom: 14px; }
+  .tree-section .heading {
+    font-size: 11px; color: var(--text-dim);
+    text-transform: uppercase; letter-spacing: 0.6px;
+    margin-bottom: 6px; padding: 0 8px;
+  }
+  .tree-item {
+    padding: 5px 8px; border-radius: 4px;
+    cursor: pointer; font-size: 12px;
+    display: flex; align-items: center; gap: 6px;
+    transition: background 0.1s;
+  }
+  .tree-item:hover { background: var(--panel-2); }
+  .tree-item.active { background: var(--accent); color: var(--bg); font-weight: 700; }
+  .tree-item .icon { font-size: 11px; }
+  .tree-item .badge {
+    margin-left: auto;
+    font-size: 9px; padding: 1px 5px; border-radius: 8px;
+    background: var(--border); color: var(--text-dim);
+    font-family: "SF Mono", monospace;
+  }
+  .tree-item.active .badge { background: var(--bg); color: var(--text); }
+
+  /* category color tags */
+  .cat-data { color: var(--good); }
+  .cat-env { color: var(--accent); }
+  .cat-agent { color: var(--purple); }
+  .cat-script { color: var(--accent-2); }
+  .cat-util { color: var(--pink); }
+  .cat-config { color: var(--text-dim); }
+
+  /* ── Main ── */
+  .main { flex: 1; overflow-y: auto; padding: 20px; }
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ── File detail ── */
+  .file-header {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  .file-header h2 { font-size: 20px; margin: 0; color: var(--accent); font-family: "SF Mono", monospace; }
+  .file-header .tag { background: var(--panel-2); padding: 2px 8px; border-radius: 4px; font-size: 10px; color: var(--text-dim); font-family: monospace; }
+  .file-header .open-link { margin-left: auto; font-size: 11px; color: var(--text-dim); }
+  .file-header .open-link a { color: var(--accent); text-decoration: none; }
+
+  .role-box {
+    background: var(--panel); border-left: 3px solid var(--accent);
+    padding: 10px 14px; border-radius: 0 6px 6px 0;
+    margin-bottom: 16px;
+  }
+  .role-box h3 { margin: 0 0 4px 0; font-size: 11px; color: var(--accent-2); text-transform: uppercase; }
+
+  .section { background: var(--panel); border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+  .section h3 { margin: 0 0 10px 0; font-size: 13px; color: var(--accent-2); }
+
+  .deps-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .dep-list { background: var(--panel-2); border-radius: 6px; padding: 10px; }
+  .dep-list h4 { margin: 0 0 6px 0; font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+  .dep-list ul { margin: 0; padding-left: 16px; }
+  .dep-list li { font-family: "SF Mono", monospace; font-size: 11px; margin-bottom: 3px; cursor: pointer; }
+  .dep-list li.linkable:hover { color: var(--accent); text-decoration: underline; }
+
+  /* function list */
+  .func-list { display: flex; flex-direction: column; gap: 6px; }
+  .func {
+    background: var(--panel-2); border-radius: 6px; padding: 10px;
+    border-left: 3px solid var(--purple);
+  }
+  .func .sig { font-family: "SF Mono", monospace; font-size: 12px; color: var(--accent); margin-bottom: 4px; }
+  .func .desc { font-size: 12px; color: var(--text); }
+  .func .meta { font-size: 10px; color: var(--text-dim); margin-top: 4px; }
+
+  /* code snippet */
+  .snippet {
+    margin-bottom: 10px;
+  }
+  .snippet-title {
+    display: flex; align-items: center; justify-content: space-between;
+    cursor: pointer; padding: 6px 10px; background: var(--panel-2); border-radius: 6px;
+    font-size: 12px;
+  }
+  .snippet-title .title-text { color: var(--accent-2); font-weight: 600; }
+  .snippet-title .toggle { color: var(--text-dim); font-size: 10px; }
+  .snippet-code {
+    display: none;
+    background: var(--code-bg); border-radius: 0 0 6px 6px;
+    padding: 12px; margin-top: -2px;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 11px; line-height: 1.55;
+    overflow-x: auto;
+    white-space: pre;
+    color: #e2e8f0;
+  }
+  .snippet.open .snippet-code { display: block; }
+  .snippet.open .snippet-title { border-radius: 6px 6px 0 0; }
+  .snippet-code .kw { color: #c084fc; }
+  .snippet-code .str { color: var(--good); }
+  .snippet-code .num { color: var(--accent-2); }
+  .snippet-code .com { color: var(--text-dim); font-style: italic; }
+  .snippet-code .fn { color: var(--accent); }
+
+  /* ── Flow diagram ── */
+  .flow-svg { width: 100%; height: 600px; background: var(--panel); border-radius: 8px; }
+  .flow-node {
+    cursor: pointer; transition: filter 0.2s;
+  }
+  .flow-node:hover { filter: brightness(1.3); }
+  .flow-node rect { transition: all 0.2s; }
+  .flow-node.highlight rect { stroke: var(--accent-2); stroke-width: 3; }
+  .flow-edge { stroke: var(--text-dim); stroke-width: 1.5; fill: none; }
+  .flow-edge.highlight { stroke: var(--accent-2); stroke-width: 2.5; }
+  .flow-label { font-family: "SF Mono", monospace; font-size: 11px; fill: white; pointer-events: none; }
+  .flow-sublabel { font-size: 9px; fill: rgba(255,255,255,0.6); pointer-events: none; }
+
+  /* ── Call graph ── */
+  .call-info {
+    background: var(--panel); border-radius: 8px; padding: 12px;
+    margin-bottom: 12px;
+  }
+  .call-info h3 { margin: 0 0 8px 0; font-size: 13px; color: var(--accent-2); }
+
+  /* welcome */
+  .welcome {
+    text-align: center; padding: 60px 20px; color: var(--text-dim);
+  }
+  .welcome h2 { color: var(--accent); margin-bottom: 8px; }
+  .welcome .icons { font-size: 40px; margin: 20px 0; }
+
+  /* tag pills */
+  .pill {
+    display: inline-block; padding: 1px 7px; border-radius: 10px;
+    font-size: 10px; margin-right: 4px;
+    font-family: "SF Mono", monospace;
+  }
+  .pill-data { background: rgba(74, 222, 128, 0.2); color: var(--good); }
+  .pill-env { background: rgba(56, 189, 248, 0.2); color: var(--accent); }
+  .pill-agent { background: rgba(168, 85, 247, 0.2); color: var(--purple); }
+  .pill-script { background: rgba(251, 191, 36, 0.2); color: var(--accent-2); }
+  .pill-util { background: rgba(236, 72, 153, 0.2); color: var(--pink); }
+  .pill-config { background: rgba(148, 163, 184, 0.2); color: var(--text-dim); }
+
+  /* recent docs link */
+  .quick-links {
+    background: var(--panel); border-radius: 8px; padding: 14px;
+  }
+  .quick-links h3 { margin: 0 0 8px 0; font-size: 12px; color: var(--accent-2); text-transform: uppercase; }
+  .quick-links a {
+    display: block; color: var(--accent); text-decoration: none; padding: 4px 0;
+    font-family: "SF Mono", monospace; font-size: 12px;
+  }
+  .quick-links a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>📚 따릉이 RL 프로젝트 — 소스 가이드</h1>
+  <div class="tabs">
+    <button class="tab active" onclick="setView('file')">파일별 상세</button>
+    <button class="tab" onclick="setView('flow')">데이터 흐름</button>
+    <button class="tab" onclick="setView('call')">호출 관계</button>
+    <button class="tab" onclick="setView('home')">홈</button>
+  </div>
+  <input type="text" class="search-box" id="search" placeholder="🔍 파일/함수 검색" />
+</div>
+
+<div class="container">
+
+  <!-- ─── Sidebar ─── -->
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <main class="main">
+    <!-- HOME -->
+    <div class="view active" id="view-home">
+      <div class="role-box">
+        <h3>프로젝트 개요</h3>
+        <div>서울시 공공자전거 따릉이의 정류소 간 재배치 문제를 강화학습으로 푸는 프로젝트.</div>
+        <div style="margin-top: 8px; color: var(--text-dim);">
+          트럭 N대가 자전거를 옮겨 대여실패(stockout) + 반납실패(full)을 최소화. SB3 DQN 기반.
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>📂 전체 구조 (한눈에)</h3>
+        <pre style="font-family: 'SF Mono', monospace; font-size: 11px; line-height: 1.7; color: var(--text);">
+rl_project/
+├── <span style="color: var(--good);">src/data/preprocess.py</span>          ← 원본 CSV → parquet 4종 변환
+├── <span style="color: var(--pink);">src/utils/geo.py</span>                ← Haversine 거리 / 이동 step 계산
+├── <span style="color: var(--accent);">src/envs/data_loader.py</span>         ← episode 1개분 numpy 묶음 생성
+├── <span style="color: var(--accent);">src/envs/rebalance_env.py</span>       ← Gymnasium 환경 (시뮬레이터)
+├── <span style="color: var(--purple);">src/agents/baselines.py</span>         ← NO-OP, most_imbalanced 휴리스틱
+├── <span style="color: var(--purple);">src/agents/masked_dqn.py</span>        ← SB3 DQN + action mask + Double Q
+├── <span style="color: var(--accent-2);">scripts/run_preprocess.py</span>       ← 전처리 진입점
+├── <span style="color: var(--accent-2);">scripts/test_env.py</span>             ← 환경 sanity check
+├── <span style="color: var(--accent-2);">scripts/run_baseline.py</span>         ← 베이스라인 비교 (Phase 3)
+├── <span style="color: var(--accent-2);">scripts/train.py</span>                ← DQN 학습 (Phase 4)
+├── <span style="color: var(--accent-2);">scripts/export_replay.py</span>        ← 학습 모델 → replay JSON
+├── <span style="color: var(--accent-2);">scripts/plot_demand.py</span>          ← EDA 시각화
+└── <span style="color: var(--text-dim);">config/default.yaml</span>             ← 하이퍼파라미터 (참조용)</pre>
+      </div>
+
+      <div class="section quick-links">
+        <h3>🔗 관련 인터랙티브 문서</h3>
+        <a href="training_flow.html" target="_blank">→ training_flow.html — 환경 + DQN 흐름 시뮬레이터 (5 정류소 미니 버전)</a>
+        <a href="replay_viewer.html" target="_blank">→ replay_viewer.html — 학습된 모델 episode 재생 (실제 마포구 146 정류소)</a>
+        <a href="training_curve.png" target="_blank">→ training_curve.png — DQN 학습 곡선 이미지</a>
+      </div>
+
+      <div class="section">
+        <h3>👉 사용법</h3>
+        <ul style="padding-left: 18px; line-height: 1.8;">
+          <li>좌측 트리에서 파일 클릭 → 상세 정보 (역할, 함수 목록, 의존성, 코드 스니펫)</li>
+          <li>상단 탭 <b>데이터 흐름</b> → CSV → parquet → 학습까지의 노드 다이어그램. 노드 클릭 시 해당 파일로 이동</li>
+          <li>상단 탭 <b>호출 관계</b> → 어떤 스크립트가 어떤 모듈을 부르는지 매트릭스</li>
+          <li>상단 검색창 → 파일·함수 이름 일부 입력 시 트리에서 필터링</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- FILE DETAIL -->
+    <div class="view" id="view-file">
+      <div id="file-detail">
+        <div class="welcome">
+          <div class="icons">📂</div>
+          <h2>좌측에서 파일을 선택하세요</h2>
+          <div>파일별 역할, 핵심 함수, 의존성, 코드 스니펫을 볼 수 있습니다.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FLOW -->
+    <div class="view" id="view-flow">
+      <div class="role-box">
+        <h3>데이터 흐름 다이어그램</h3>
+        <div>원본 CSV가 어떻게 학습 가능한 형태로 변환되고, 환경·DQN에 공급되어 모델이 학습/평가되는지 시각화. 노드를 클릭하면 해당 파일 상세로 이동.</div>
+      </div>
+      <svg class="flow-svg" id="flow-svg" viewBox="0 0 1100 600"></svg>
+    </div>
+
+    <!-- CALL GRAPH -->
+    <div class="view" id="view-call">
+      <div class="role-box">
+        <h3>호출 관계</h3>
+        <div>어떤 스크립트가 어떤 모듈을 import 하는지, 어느 함수를 호출하는지 정리.</div>
+      </div>
+      <div id="call-detail"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════
+// 파일 데이터
+// ════════════════════════════════════════════════════════════════
+const FILES = {
+  "src/data/preprocess.py": {
+    cat: "data",
+    role: "원본 따릉이 CSV (CP949) → parquet 4종 (stations / trips / demand / weather) 변환. 한 번 돌려두면 학습이 그 parquet만 읽으면 됨.",
+    funcs: [
+      { sig: "load_stations(path)", desc: "정류소 마스터 CSV → DataFrame. 위경도 0(폐쇄) 제거, 주소에서 자치구 파생.", meta: "@returns DataFrame[station_id, lat, lon, gu, address1, address2]" },
+      { sig: "load_trips(stations, keep_gu, min_min=1, max_min=1440)", desc: "월별 trip CSV들을 파일 단위 스트리밍으로 읽어 필터링 후 concat. 비정상 trip(1분 미만/24h 초과/end<start) 제거. keep_gu로 자치구 서브셋만 유지 가능.", meta: "메모리 절감: 파일별로 필터 적용 후 concat" },
+      { sig: "trips_to_demand(trips, freq='10min')", desc: "trip 한 건 → 출발 정류소 rentals +1, 도착 정류소 returns +1로 분해. (시각, 정류소) × (rentals, returns) sparse 테이블 반환.", meta: "outer merge로 한쪽만 발생한 칸도 보존" },
+      { sig: "load_weather(glob_pattern)", desc: "ASOS 시간자료 CSV → 정제된 시간별 날씨 DF. QC플래그 드롭, 누적치(강수/적설/일조)는 0 채움, 순간값은 limit=3 시간 보간.", meta: "" },
+      { sig: "resample_weather(weather, freq='10min')", desc: "시간 단위 → step 단위(10분)로 ffill 다운샘플. demand와 동일 시간격자에 맞춤.", meta: "" },
+      { sig: "add_calendar_features(df, time_col='t')", desc: "주말/공휴일/공휴일 전날 flag 추가. is_holiday_eve = 평일 중 내일이 휴일인 경우.", meta: "holidays.SouthKorea 패키지 사용" },
+      { sig: "run(keep_gu, step_freq, out_dir)", desc: "전체 파이프라인: stations → trips → demand → weather, 모두 parquet 저장.", meta: "@returns dict[name → Path]" }
+    ],
+    imports: ["pandas", "holidays", "glob", "pathlib.Path"],
+    usedBy: ["scripts/run_preprocess.py"],
+    snippets: [
+      {
+        title: "load_stations: 위경도 0 제거 + 자치구 추출",
+        code: `<span class="kw">def</span> <span class="fn">load_stations</span>(path: Path | <span class="kw">None</span> = <span class="kw">None</span>) -> pd.DataFrame:
+    path = path <span class="kw">or</span> (RAW_DIR / <span class="str">"stations_master.csv"</span>)
+    df = pd.read_csv(path, encoding=ENCODING).rename(columns=STATION_COLS)
+
+    <span class="com"># 위/경도 숫자 변환 (변환 실패 시 NaN)</span>
+    df[<span class="str">"lat"</span>] = pd.to_numeric(df[<span class="str">"lat"</span>], errors=<span class="str">"coerce"</span>)
+    df[<span class="str">"lon"</span>] = pd.to_numeric(df[<span class="str">"lon"</span>], errors=<span class="str">"coerce"</span>)
+
+    <span class="com"># (0,0) 좌표 = 폐쇄 정류소 → 제거</span>
+    before = len(df)
+    df = df[(df[<span class="str">"lat"</span>].abs() > <span class="num">1e-6</span>) & (df[<span class="str">"lon"</span>].abs() > <span class="num">1e-6</span>)].copy()
+
+    <span class="com"># 서울특별시 주소에서 ○○구 추출 (예: "서울특별시 마포구 ..." → "마포구")</span>
+    df[<span class="str">"gu"</span>] = df[<span class="str">"address1"</span>].str.extract(<span class="str">r"서울특별시\\s+(\\S+구)"</span>, expand=<span class="kw">False</span>)
+    <span class="kw">return</span> df.drop_duplicates(<span class="str">"station_id"</span>).reset_index(drop=<span class="kw">True</span>)`
+      },
+      {
+        title: "trips_to_demand: trip → (시각, 정류소) 카운트 (outer merge)",
+        code: `<span class="kw">def</span> <span class="fn">trips_to_demand</span>(trips: pd.DataFrame, freq: str = <span class="str">"10min"</span>) -> pd.DataFrame:
+    <span class="com"># 출발 카운트</span>
+    starts = (
+        trips.assign(t=trips[<span class="str">"start_time"</span>].dt.floor(freq))
+        .groupby([<span class="str">"t"</span>, <span class="str">"start_station_id"</span>])
+        .size().rename(<span class="str">"rentals"</span>).reset_index()
+        .rename(columns={<span class="str">"start_station_id"</span>: <span class="str">"station_id"</span>})
+    )
+    <span class="com"># 도착 카운트 (end_time 기준)</span>
+    ends = (
+        trips.assign(t=trips[<span class="str">"end_time"</span>].dt.floor(freq))
+        .groupby([<span class="str">"t"</span>, <span class="str">"end_station_id"</span>])
+        .size().rename(<span class="str">"returns"</span>).reset_index()
+        .rename(columns={<span class="str">"end_station_id"</span>: <span class="str">"station_id"</span>})
+    )
+    <span class="kw">return</span> (
+        starts.merge(ends, on=[<span class="str">"t"</span>, <span class="str">"station_id"</span>], how=<span class="str">"outer"</span>)
+        .fillna(<span class="num">0</span>).astype({<span class="str">"rentals"</span>: <span class="str">"int32"</span>, <span class="str">"returns"</span>: <span class="str">"int32"</span>})
+        .sort_values([<span class="str">"t"</span>, <span class="str">"station_id"</span>]).reset_index(drop=<span class="kw">True</span>)
+    )`
+      }
+    ]
+  },
+
+  "src/utils/geo.py": {
+    cat: "util",
+    role: "정류소 위경도로부터 거리 행렬, 이동 step 행렬 계산. data_loader가 episode 빌드 시 호출.",
+    funcs: [
+      { sig: "haversine(lat1, lon1, lat2, lon2)", desc: "두 좌표 간 km 거리 (지구 곡률 반영).", meta: "EARTH_RADIUS_KM=6371" },
+      { sig: "compute_distance_matrix(coords)", desc: "(N, 2) 위경도 → (N, N) km 행렬. O(N²) double loop. 대각선=0.", meta: "" },
+      { sig: "distance_to_travel_steps(distance_matrix, speed_kmh, step_duration_min)", desc: "km → step 수 ceil 변환. 25km/h, 10분 step이면 1 step = 4.17 km.", meta: "" }
+    ],
+    imports: ["numpy"],
+    usedBy: ["src/envs/data_loader.py"],
+    snippets: [
+      {
+        title: "Haversine 공식",
+        code: `<span class="kw">def</span> <span class="fn">haversine</span>(lat1, lon1, lat2, lon2) -> float:
+    lat1, lon1, lat2, lon2 = map(np.radians, [lat1, lon1, lat2, lon2])
+    dlat = lat2 - lat1
+    dlon = lon2 - lon1
+    a = np.sin(dlat / <span class="num">2</span>) ** <span class="num">2</span> + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / <span class="num">2</span>) ** <span class="num">2</span>
+    <span class="kw">return</span> <span class="num">2</span> * EARTH_RADIUS_KM * np.arcsin(np.sqrt(a))`
+      }
+    ]
+  },
+
+  "src/envs/data_loader.py": {
+    cat: "env",
+    role: "parquet 4종에서 episode 1개분 정적 데이터(정류소, 거리행렬, demand 격자, 초기 자전거)를 EpisodeData numpy 묶음으로 만들어 환경에 공급.",
+    funcs: [
+      { sig: "load_episode(processed_dir, district, episode_start, ...) -> EpisodeData", desc: "1 episode (예: 마포구 1/15 00:00~) 분량의 모든 정적 데이터를 한 묶음으로 빌드. 환경이 이걸 받아 시뮬레이션 시작.", meta: "@returns EpisodeData" },
+      { sig: "_filter_stations(stations, district)", desc: "stations 마스터에서 gu==district 행만 추출, station_id 정렬.", meta: "private" },
+      { sig: "_build_demand_grid(demand, station_ids, timestamps)", desc: "sparse demand parquet → dense (T=144, N) rentals/returns 두 행렬. id_to_idx 매핑으로 벡터화.", meta: "private, 매 step O(1) 인덱싱 가능" },
+      { sig: "_estimate_initial_bikes(capacity, rentals, returns, mode, fill_ratio)", desc: "초기 자전거 분포 추정. data_based: 첫 6 step net flow로 보정. uniform: 모두 capacity × 0.5.", meta: "private" }
+    ],
+    imports: ["pandas", "numpy", "src.utils.geo"],
+    usedBy: ["src/envs/rebalance_env.py (간접: EpisodeData 사용)", "scripts/train.py", "scripts/test_env.py", "scripts/run_baseline.py", "scripts/export_replay.py"],
+    snippets: [
+      {
+        title: "EpisodeData dataclass — 환경에 주입되는 데이터",
+        code: `<span class="kw">@dataclass</span>
+<span class="kw">class</span> EpisodeData:
+    station_ids: list[str]          <span class="com"># 길이 N</span>
+    station_coords: np.ndarray      <span class="com"># (N, 2) lat/lon</span>
+    distance_matrix: np.ndarray     <span class="com"># (N, N) km</span>
+    travel_steps: np.ndarray        <span class="com"># (N, N) int, 같은 정류소=0</span>
+    capacity: np.ndarray            <span class="com"># (N,) int — 일괄 20</span>
+    initial_bikes: np.ndarray       <span class="com"># (N,) int</span>
+    rentals: np.ndarray             <span class="com"># (T, N) int — 매 step 대여 요청</span>
+    returns: np.ndarray             <span class="com"># (T, N) int — 매 step 반납 요청</span>
+    timestamps: pd.DatetimeIndex    <span class="com"># 길이 T</span>`
+      },
+      {
+        title: "_build_demand_grid: sparse → dense",
+        code: `<span class="kw">def</span> <span class="fn">_build_demand_grid</span>(demand, station_ids, timestamps):
+    id_to_idx = {sid: i <span class="kw">for</span> i, sid <span class="kw">in</span> enumerate(station_ids)}
+    t_to_idx = {t: i <span class="kw">for</span> i, t <span class="kw">in</span> enumerate(timestamps)}
+
+    sub = demand[
+        demand[<span class="str">"station_id"</span>].isin(id_to_idx) &
+        demand[<span class="str">"t"</span>].isin(t_to_idx)
+    ]
+    T, N = len(timestamps), len(station_ids)
+    rentals = np.zeros((T, N), dtype=np.int32)
+    returns = np.zeros((T, N), dtype=np.int32)
+
+    <span class="kw">if</span> len(sub) > <span class="num">0</span>:
+        ti = sub[<span class="str">"t"</span>].map(t_to_idx).to_numpy()
+        si = sub[<span class="str">"station_id"</span>].map(id_to_idx).to_numpy()
+        rentals[ti, si] = sub[<span class="str">"rentals"</span>].to_numpy()
+        returns[ti, si] = sub[<span class="str">"returns"</span>].to_numpy()
+    <span class="kw">return</span> rentals, returns`
+      }
+    ]
+  },
+
+  "src/envs/rebalance_env.py": {
+    cat: "env",
+    role: "Gymnasium 환경. EpisodeData를 받아 시뮬레이션 시계를 굴림. 1 RL step = 1 트럭의 1 결정 (Parameter sharing). 환경이 turn 관리, 모든 트럭 busy면 시계 진행.",
+    funcs: [
+      { sig: "RebalanceEnv(episode_data, n_trucks=3, ...)", desc: "환경 초기화. EpisodeData 1개 또는 리스트 받음(리스트면 reset마다 회전). action_space=Discrete(N), observation_space=Box(N+4·n_trucks+4).", meta: "" },
+      { sig: "reset(seed)", desc: "episode 회전, bikes 초기화, 트럭 무작위 배치, current_truck=0.", meta: "@returns (obs, info)" },
+      { sig: "step(action)", desc: "1) 현재 트럭에 action 적용 (출발 또는 머무름)  2) 다음 idle 트럭 생길 때까지 시계 진행 (_advance_until_next_decision)  3) 새 obs 반환.", meta: "@returns (obs, reward, done, truncated, info)" },
+      { sig: "_advance_until_next_decision()", desc: "다음 idle 트럭 찾기. 모두 busy면 _tick()으로 시계 진행. t≥T면 done.", meta: "private, async-like" },
+      { sig: "_tick()", desc: "환경 1 step 진행. (1) demand replay: rentals/returns 적용, stockout/full 카운트. (2) 트럭 이동 카운트다운, 도착 시 _apply_rebalance.", meta: "private, 매 시계 진행마다 호출" },
+      { sig: "_apply_rebalance(truck)", desc: "도착 정류소에서 target = capacity × 0.5 기준 잉여면 적재, 부족이면 하차. 수량은 규칙 기반 (학습 대상 아님).", meta: "private" },
+      { sig: "_get_obs()", desc: "observation 벡터 빌드: bike_ratio(N), loc(n_t), load(n_t), remaining(n_t), cur_truck_onehot(n_t), sin/cos(hour, episode_frac).", meta: "모두 [-1, 1]" },
+      { sig: "action_masks()", desc: "이동 가능 정류소 마스크. 다른 트럭이 향하는 destination은 False, 자기 위치는 True. MaskableDQN이 사용.", meta: "@returns bool array (N,)" }
+    ],
+    imports: ["gymnasium", "numpy", "src.envs.data_loader.EpisodeData"],
+    usedBy: ["scripts/train.py", "scripts/test_env.py", "scripts/run_baseline.py", "scripts/export_replay.py", "src/agents/baselines.py"],
+    snippets: [
+      {
+        title: "step() — RL의 1 step",
+        code: `<span class="kw">def</span> <span class="fn">step</span>(self, action):
+    truck = self.trucks[self.current_truck]
+    <span class="kw">assert</span> truck.is_idle
+
+    reward = <span class="num">0.0</span>
+    dest = int(action)
+    <span class="kw">if</span> dest == truck.location:
+        truck.remaining_steps = <span class="num">1</span>   <span class="com"># 머무름</span>
+    <span class="kw">else</span>:
+        steps = int(self.data.travel_steps[truck.location, dest])
+        km = float(self.data.distance_matrix[truck.location, dest])
+        truck.destination = dest
+        truck.remaining_steps = max(steps, <span class="num">1</span>)
+        reward += self.w_travel_km * km   <span class="com"># 거리 비용 즉시</span>
+
+    <span class="com"># 다음 idle 트럭 나타날 때까지 시계 진행</span>
+    reward_advance, done = self._advance_until_next_decision()
+    reward += reward_advance
+    <span class="kw">return</span> self._get_obs(), reward, done, <span class="kw">False</span>, self._info()`
+      },
+      {
+        title: "_tick() — demand replay + 트럭 이동",
+        code: `<span class="kw">def</span> <span class="fn">_tick</span>(self):
+    rentals = self.data.rentals[self.t]
+    returns = self.data.returns[self.t]
+
+    <span class="com"># 대여 처리 → stockout 카운트</span>
+    served = np.minimum(rentals, self.bikes)
+    stockout = (rentals - served).sum()
+    self.bikes -= served
+
+    <span class="com"># 반납 처리 → full 카운트</span>
+    space = self.data.capacity - self.bikes
+    served_ret = np.minimum(returns, space)
+    full = (returns - served_ret).sum()
+    self.bikes += served_ret
+
+    reward = self.w_stockout * stockout + self.w_full * full
+
+    <span class="com"># 트럭 이동 카운트다운</span>
+    <span class="kw">for</span> tr <span class="kw">in</span> self.trucks:
+        <span class="kw">if</span> tr.is_idle: <span class="kw">continue</span>
+        reward += self.w_travel_step
+        tr.remaining_steps -= <span class="num">1</span>
+        <span class="kw">if</span> tr.remaining_steps == <span class="num">0</span>:
+            tr.location = tr.destination
+            self._apply_rebalance(tr)
+
+    self.t += <span class="num">1</span>
+    <span class="kw">return</span> reward`
+      },
+      {
+        title: "action_masks() — 무효 행동 차단",
+        code: `<span class="kw">def</span> <span class="fn">action_masks</span>(self):
+    mask = np.ones(self.N, dtype=bool)
+    <span class="kw">if not</span> self.use_action_mask:
+        <span class="kw">return</span> mask
+    <span class="com"># 다른 트럭이 향하는 destination 차단 (중복 작업 방지)</span>
+    <span class="kw">for</span> i, tr <span class="kw">in</span> enumerate(self.trucks):
+        <span class="kw">if</span> i == self.current_truck <span class="kw">or</span> tr.is_idle:
+            <span class="kw">continue</span>
+        mask[tr.destination] = <span class="kw">False</span>
+    <span class="com"># 안전장치: 모두 막혔으면 자기 위치는 강제 허용</span>
+    <span class="kw">if not</span> mask.any():
+        mask[self.trucks[self.current_truck].location] = <span class="kw">True</span>
+    <span class="kw">return</span> mask`
+      }
+    ]
+  },
+
+  "src/agents/baselines.py": {
+    cat: "agent",
+    role: "RL과 비교할 비학습 정책들. env 내부 상태(env.bikes, env.trucks)를 직접 보고 다음 정류소 결정. Phase 3 (베이스라인 평가) 및 train.py에서 학습 기준선으로 사용.",
+    funcs: [
+      { sig: "BasePolicy (abstract)", desc: "act(env) → 정류소 idx 인터페이스.", meta: "" },
+      { sig: "NoopPolicy", desc: "자기 위치 반환 → 트럭이 항상 머무름. 재배치 효과 검증용 (RL 상한선).", meta: "name='noop'" },
+      { sig: "MostImbalancedPolicy", desc: "탐욕적: 빈 트럭→가장 잉여 큰 정류소, 가득 트럭→가장 부족 큰 정류소, 부분→|bikes-target| 큰 곳. 다른 트럭 destination 제외.", meta: "name='most_imbalanced', RL이 넘어야 할 강한 베이스라인" },
+      { sig: "get_policy(name)", desc: "이름으로 정책 인스턴스 반환. POLICY_REGISTRY 사용.", meta: "" }
+    ],
+    imports: ["numpy", "src.envs.rebalance_env.RebalanceEnv"],
+    usedBy: ["scripts/train.py (휴리스틱 reward 측정)", "scripts/run_baseline.py"],
+    snippets: [
+      {
+        title: "MostImbalancedPolicy.act() — 탐욕적 균형 정책",
+        code: `<span class="kw">def</span> <span class="fn">act</span>(self, env: RebalanceEnv) -> int:
+    truck = env.trucks[env.current_truck]
+    bikes = env.bikes.astype(np.float32)
+    target = env.data.capacity.astype(np.float32) * env.target_fill_ratio
+
+    <span class="kw">if</span> truck.load == <span class="num">0</span>:
+        scores = bikes - target            <span class="com"># 잉여 큰 곳일수록 높음</span>
+    <span class="kw">elif</span> truck.load >= env.truck_capacity:
+        scores = target - bikes            <span class="com"># 부족 큰 곳일수록 높음</span>
+    <span class="kw">else</span>:
+        scores = np.abs(bikes - target)    <span class="com"># 불균형 큰 곳</span>
+
+    <span class="com"># 자기 위치 + 다른 트럭 목적지 제외</span>
+    scores[truck.location] = -np.inf
+    <span class="kw">for</span> i, other <span class="kw">in</span> enumerate(env.trucks):
+        <span class="kw">if</span> i != env.current_truck <span class="kw">and not</span> other.is_idle:
+            scores[other.destination] = -np.inf
+
+    <span class="kw">return</span> int(np.argmax(scores))`
+      }
+    ]
+  },
+
+  "src/agents/masked_dqn.py": {
+    cat: "agent",
+    role: "SB3 DQN 확장: ε-greedy 탐색·predict·argmax에서 invalid action 마스킹. Double DQN 타깃 옵션. SB3 DQN은 마스킹 미지원이라 직접 override.",
+    funcs: [
+      { sig: "MaskableDQN(*args, double_q=False, **kwargs)", desc: "DQN 상속. double_q=True면 train()에서 Double DQN 타깃 사용.", meta: "" },
+      { sig: "_env_action_masks(n_envs)", desc: "VecEnv의 각 sub-env에서 action_masks() 호출 → (n_envs, N) bool 배열.", meta: "private" },
+      { sig: "_masked_argmax(obs, masks)", desc: "Q값 계산 후 마스크된 위치를 -inf로 만들어 argmax. 학습 시 ε-greedy의 활용 단계에서 사용.", meta: "private" },
+      { sig: "_sample_action(learning_starts, ...)", desc: "ε-greedy 탐색 override: 무작위는 마스크 통과만, 활용은 _masked_argmax.", meta: "private, DQN._sample_action 오버라이드" },
+      { sig: "predict(obs, ..., action_masks)", desc: "마스크 인자 받음. None이면 vanilla DQN.predict, 있으면 마스킹 적용.", meta: "evaluate시 사용" },
+      { sig: "train(gradient_steps, batch_size)", desc: "double_q=True면 Double DQN: online net으로 argmax, target net으로 평가. False면 vanilla DQN 학습 그대로.", meta: "Q 과대추정 완화" }
+    ],
+    imports: ["torch", "numpy", "stable_baselines3.DQN"],
+    usedBy: ["scripts/train.py (--algo masked_dqn)", "scripts/export_replay.py"],
+    snippets: [
+      {
+        title: "_masked_argmax: 마스크 적용 argmax",
+        code: `<span class="kw">def</span> <span class="fn">_masked_argmax</span>(self, obs, masks):
+    <span class="kw">with</span> th.no_grad():
+        obs_t = th.as_tensor(obs, device=self.device)
+        q = self.q_net(obs_t).cpu().numpy()
+    q = q.copy()
+    q[~masks] = -np.inf   <span class="com"># 마스크된 정류소 Q값을 -∞로</span>
+    <span class="kw">return</span> q.argmax(axis=<span class="num">1</span>)`
+      },
+      {
+        title: "train() — Double DQN 타깃 (option)",
+        code: `<span class="kw">def</span> <span class="fn">train</span>(self, gradient_steps, batch_size):
+    <span class="kw">if not</span> self.double_q:
+        <span class="kw">return</span> super().train(gradient_steps, batch_size)
+
+    <span class="kw">for</span> _ <span class="kw">in</span> range(gradient_steps):
+        replay_data = self.replay_buffer.sample(batch_size)
+        <span class="kw">with</span> th.no_grad():
+            <span class="com"># Double DQN: online net으로 argmax, target net으로 평가</span>
+            next_actions = self.q_net(replay_data.next_observations).argmax(dim=<span class="num">1</span>, keepdim=<span class="kw">True</span>)
+            next_q_target = self.q_net_target(replay_data.next_observations)
+            next_q = next_q_target.gather(<span class="num">1</span>, next_actions)
+            target_q = replay_data.rewards + (<span class="num">1</span> - replay_data.dones) * self.gamma * next_q
+
+        current_q = self.q_net(replay_data.observations).gather(<span class="num">1</span>, replay_data.actions.long())
+        loss = F.smooth_l1_loss(current_q, target_q)
+        <span class="com"># optimizer step ...</span>`
+      }
+    ]
+  },
+
+  "scripts/run_preprocess.py": {
+    cat: "script",
+    role: "전처리 진입점 CLI. argparse로 --gu, --step, --out 받아서 preprocess.run() 호출.",
+    funcs: [
+      { sig: "main()", desc: "CLI parsing → preprocess.run() → 출력 파일 경로 출력.", meta: "" }
+    ],
+    imports: ["src.data.preprocess.run"],
+    usedBy: ["사용자 (CLI)"],
+    snippets: [
+      {
+        title: "주요 명령어",
+        code: `<span class="com"># 기본: 마포구만, 10분 step</span>
+python scripts/run_preprocess.py
+
+<span class="com"># 여러 자치구</span>
+python scripts/run_preprocess.py --gu 마포구 영등포구 강남구
+
+<span class="com"># 서울 전체</span>
+python scripts/run_preprocess.py --gu all
+
+<span class="com"># 다른 step 단위</span>
+python scripts/run_preprocess.py --step 5min`
+      }
+    ]
+  },
+
+  "scripts/test_env.py": {
+    cat: "script",
+    role: "환경 sanity check. NO-OP / RANDOM 정책으로 1 episode 돌려서 환경이 정상 동작하는지 검증 (무한루프 X, reward signal 존재).",
+    funcs: [
+      { sig: "run_policy(env, policy, seed)", desc: "noop 또는 random 정책으로 1 episode 끝까지 돌리고 누적 결과 반환.", meta: "" },
+      { sig: "main()", desc: "1 episode 로드 → 두 정책 비교 출력.", meta: "" }
+    ],
+    imports: ["src.envs.data_loader.load_episode", "src.envs.rebalance_env.RebalanceEnv"],
+    usedBy: ["사용자 (CLI)"],
+    snippets: [
+      {
+        title: "실행",
+        code: `python scripts/test_env.py
+python scripts/test_env.py --district 강남구 --date 2025-02-10 --n-trucks 5
+
+<span class="com"># 출력 예시:</span>
+<span class="com"># === Loading episode: 마포구 @ 2025-01-15 ===</span>
+<span class="com">#   stations=146, steps=144, total_rentals=2212</span>
+<span class="com">#</span>
+<span class="com"># === NOOP ===</span>
+<span class="com">#   total_reward         -XX.XX</span>
+<span class="com">#   stockout             XX</span>
+<span class="com"># === RANDOM ===</span>
+<span class="com">#   ...</span>`
+      }
+    ]
+  },
+
+  "scripts/run_baseline.py": {
+    cat: "script",
+    role: "베이스라인 정책 비교 (Phase 3). 여러 날짜에 대해 noop/random/most_imbalanced 평균 성능 표로 출력. RL이 넘어야 할 기준선.",
+    funcs: [
+      { sig: "run_one_episode(env, policy, seed)", desc: "정책 인스턴스로 1 episode 끝까지.", meta: "" },
+      { sig: "run_random(env, seed)", desc: "무작위 action으로 1 episode.", meta: "" },
+      { sig: "main()", desc: "여러 date × 여러 policy 매트릭스 평가, 표 출력, NO-OP 대비 개선율 비교.", meta: "" }
+    ],
+    imports: ["src.agents.baselines", "src.envs.data_loader", "src.envs.rebalance_env"],
+    usedBy: ["사용자 (CLI)"],
+    snippets: [
+      {
+        title: "기본 실행 + 출력",
+        code: `python scripts/run_baseline.py
+python scripts/run_baseline.py --policies noop random most_imbalanced
+
+<span class="com"># 출력 예시:</span>
+<span class="com"># policy              stockout         full      travel_km        reward</span>
+<span class="com"># noop                  XX.X ± 3.5     XX.X ± 4   0.0           -XXX.X ± X.X</span>
+<span class="com"># random               XXX.X ± 6.7    XX.X ± 8  500.0           -XXX.X ± X.X</span>
+<span class="com"># most_imbalanced       12.3 ± 2.1    XX.X ± 3   95.4            -36.97 ± 4.2  ← 강한 베이스라인</span>`
+      }
+    ]
+  },
+
+  "scripts/train.py": {
+    cat: "script",
+    role: "DQN 학습 진입점 (Phase 4). episode 풀 구성 → 휴리스틱 baseline 측정 → MaskableDQN/DQN 학습 → eval 콜백으로 5k step마다 평가.",
+    funcs: [
+      { sig: "EvalLoggerCallback", desc: "SB3 EvalCallback 확장. 매 eval 후 휴리스틱 reward와의 Δ 출력, history_store에 시계열 저장.", meta: "" },
+      { sig: "MaskedEvalCallback", desc: "MaskableDQN용 평가 콜백. env.action_masks()를 predict에 명시적으로 넘겨서 평가 시에도 마스킹 적용.", meta: "" },
+      { sig: "evaluate_heuristic(eval_episodes, ...)", desc: "학습 시작 전 most_imbalanced 휴리스틱으로 eval set 평균 reward 측정. 학습 중 비교 기준.", meta: "" },
+      { sig: "build_env(episodes, ...)", desc: "RebalanceEnv 생성 + Monitor wrapper (train 환경만).", meta: "" },
+      { sig: "main()", desc: "[1/4] episodes 로드 → [2/4] 휴리스틱 → [3/4] DQN learn() → [4/4] save.", meta: "" }
+    ],
+    imports: ["stable_baselines3.DQN", "src.agents.masked_dqn.MaskableDQN", "src.agents.baselines.get_policy", "src.envs.data_loader.load_episode", "src.envs.rebalance_env.RebalanceEnv"],
+    usedBy: ["사용자 (CLI)"],
+    snippets: [
+      {
+        title: "주요 학습 명령",
+        code: `<span class="com"># 기본 (vanilla DQN, 100k step)</span>
+python scripts/train.py --district 마포구 --tag mapo_v1
+
+<span class="com"># Masked DQN + Double Q (권장 — README §6 진단)</span>
+python scripts/train.py --algo masked_dqn --double-q --district 마포구 --tag mapo_masked_v1
+
+<span class="com"># 더 길게 학습</span>
+python scripts/train.py --timesteps 500000 --tag mapo_long
+
+<span class="com"># TensorBoard로 학습 곡선 모니터링</span>
+tensorboard --logdir logs`
+      },
+      {
+        title: "학습 루프 핵심 (DQN.learn 한 줄로 다 처리됨)",
+        code: `model = MaskableDQN(<span class="str">"MlpPolicy"</span>, train_env, double_q=<span class="kw">True</span>,
+                    learning_rate=<span class="num">1e-4</span>,
+                    buffer_size=<span class="num">100_000</span>,
+                    batch_size=<span class="num">64</span>,
+                    gamma=<span class="num">0.99</span>,
+                    exploration_fraction=<span class="num">0.3</span>,
+                    exploration_final_eps=<span class="num">0.05</span>,
+                    target_update_interval=<span class="num">1000</span>,
+                    train_freq=<span class="num">4</span>,
+                    policy_kwargs={<span class="str">"net_arch"</span>: [<span class="num">256</span>, <span class="num">256</span>]})
+
+model.learn(total_timesteps=<span class="num">100_000</span>, callback=eval_callback)
+<span class="com"># 내부에서: ε-greedy 탐색 → buffer 적재 → train_freq=4마다 학습 → 1k step마다 target net 업데이트</span>`
+      }
+    ]
+  },
+
+  "scripts/export_replay.py": {
+    cat: "script",
+    role: "학습된 모델 zip을 로드 → 1 episode 돌리며 매 step 상태/액션/reward 기록 → JSON 저장. replay_viewer.html이 읽어서 시각화.",
+    funcs: [
+      { sig: "truck_snapshot(env, total_steps)", desc: "현재 트럭들 상태를 dict 리스트로.", meta: "" },
+      { sig: "compute_q_values(model, obs)", desc: "model.q_net에 obs 넣어 Q값 추출 (시각화용).", meta: "torch 옵셔널" },
+      { sig: "main()", desc: "[1] episode load → [2] 모델 load → [3] 1 episode 굴리며 snapshot 누적 → JSON 저장.", meta: "" }
+    ],
+    imports: ["stable_baselines3.DQN", "src.agents.masked_dqn.MaskableDQN", "src.envs.data_loader.load_episode", "src.envs.rebalance_env.RebalanceEnv"],
+    usedBy: ["사용자 (CLI)", "docs/replay_viewer.html (생성된 JSON 소비)"],
+    snippets: [
+      {
+        title: "실행",
+        code: `<span class="com"># dqn_long의 best 모델로 1/15 episode</span>
+python scripts/export_replay.py
+<span class="com"># → docs/replay.json 생성</span>
+
+<span class="com"># 다른 모델/날짜로</span>
+python scripts/export_replay.py --model logs/dqn_run1/best/best_model.zip --out docs/replay_run1.json
+python scripts/export_replay.py --algo masked_dqn --model logs/masked_dqn_xx/best/best_model.zip
+python scripts/export_replay.py --date 2025-01-17 --out docs/replay_017.json`
+      }
+    ]
+  },
+
+  "scripts/plot_demand.py": {
+    cat: "script",
+    role: "EDA 시각화. demand parquet에서 시간대별 / 자치구별 / 정류소별 패턴 그래프 생성 (matplotlib).",
+    funcs: [
+      { sig: "main()", desc: "여러 시각화 figure 생성 후 docs/figures/에 저장.", meta: "구체 함수 구성은 파일 참고" }
+    ],
+    imports: ["matplotlib", "pandas"],
+    usedBy: ["사용자 (CLI)"],
+    snippets: [
+      {
+        title: "실행",
+        code: `python scripts/plot_demand.py
+<span class="com"># → docs/figures/ 에 plot 저장</span>`
+      }
+    ]
+  },
+
+  "config/default.yaml": {
+    cat: "config",
+    role: "프로젝트 전체 기본 파라미터 (시뮬레이션, 트럭, 보상, DQN 하이퍼). 현재 코드는 yaml 자동 로드 안 함 — CLI 인자가 우선. 참조용 문서 역할.",
+    funcs: [],
+    imports: [],
+    usedBy: ["README.md 참조"],
+    snippets: [
+      {
+        title: "주요 섹션",
+        code: `<span class="kw">simulation:</span>
+  step_duration_min: <span class="num">10</span>        <span class="com"># 1 step = 10분</span>
+  episode_duration_min: <span class="num">1440</span>   <span class="com"># 24시간</span>
+  initial_distribution: <span class="str">"data_based"</span>
+  demand_mode: <span class="str">"replay"</span>
+
+<span class="kw">truck:</span>
+  n_trucks: <span class="num">3</span>
+  capacity: <span class="num">20</span>
+  speed_kmh: <span class="num">25.0</span>
+  control_mode: <span class="str">"parameter_sharing"</span>
+  use_action_mask: <span class="kw">true</span>
+
+<span class="kw">reward:</span>
+  stockout: <span class="num">-1.0</span>
+  full: <span class="num">-0.8</span>
+  travel_distance_km: <span class="num">-0.01</span>
+  travel_step: <span class="num">-0.005</span>
+
+<span class="kw">dqn:</span>
+  learning_rate: <span class="num">0.0001</span>
+  buffer_size: <span class="num">100000</span>
+  batch_size: <span class="num">64</span>
+  gamma: <span class="num">0.99</span>
+  exploration_fraction: <span class="num">0.3</span>
+  policy_kwargs:
+    net_arch: [<span class="num">256</span>, <span class="num">256</span>]`
+      }
+    ]
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+// 사이드바 렌더링
+// ════════════════════════════════════════════════════════════════
+const CAT_LABELS = {
+  data: { label: "데이터 전처리", icon: "📊" },
+  util: { label: "유틸리티", icon: "🔧" },
+  env: { label: "환경 (Gymnasium)", icon: "🌐" },
+  agent: { label: "에이전트", icon: "🤖" },
+  script: { label: "실행 스크립트", icon: "▶" },
+  config: { label: "설정", icon: "⚙" }
+};
+
+function renderSidebar(filterText = "") {
+  const sb = document.getElementById("sidebar");
+  sb.innerHTML = "";
+  const f = filterText.toLowerCase();
+
+  const groups = {};
+  for (const [path, info] of Object.entries(FILES)) {
+    const cat = info.cat;
+    // search filter
+    if (f) {
+      const matchPath = path.toLowerCase().includes(f);
+      const matchFuncs = info.funcs.some(fn => fn.sig.toLowerCase().includes(f));
+      if (!matchPath && !matchFuncs) continue;
+    }
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push([path, info]);
+  }
+
+  for (const cat of ["data", "util", "env", "agent", "script", "config"]) {
+    if (!groups[cat]) continue;
+    const section = document.createElement("div");
+    section.className = "tree-section";
+    const { label, icon } = CAT_LABELS[cat];
+    section.innerHTML = `<div class="heading">${icon} ${label}</div>`;
+    for (const [path, info] of groups[cat]) {
+      const item = document.createElement("div");
+      item.className = `tree-item cat-${cat}`;
+      item.dataset.path = path;
+      const fname = path.split("/").pop();
+      item.innerHTML = `
+        <span class="icon">📄</span>
+        <span>${fname}</span>
+        <span class="badge">${info.funcs.length || "-"} fn</span>
+      `;
+      item.title = path;
+      item.onclick = () => selectFile(path);
+      section.appendChild(item);
+    }
+    sb.appendChild(section);
+  }
+}
+
+function selectFile(path) {
+  setView("file");
+  document.querySelectorAll(".tree-item").forEach(el => el.classList.remove("active"));
+  const cur = document.querySelector(`.tree-item[data-path="${path}"]`);
+  if (cur) cur.classList.add("active");
+  renderFileDetail(path);
+}
+
+function renderFileDetail(path) {
+  const info = FILES[path];
+  if (!info) return;
+  const cat = info.cat;
+  const fname = path.split("/").pop();
+  const detail = document.getElementById("file-detail");
+
+  let html = `
+    <div class="file-header">
+      <h2>${fname}</h2>
+      <span class="tag">${path}</span>
+      <span class="pill pill-${cat}">${CAT_LABELS[cat].label}</span>
+      <span class="open-link"><a href="../${path}" target="_blank">↗ 원본 파일 보기</a></span>
+    </div>
+    <div class="role-box">
+      <h3>역할</h3>
+      <div>${info.role}</div>
+    </div>
+  `;
+
+  if (info.funcs.length > 0) {
+    html += `<div class="section"><h3>주요 함수/클래스 (${info.funcs.length})</h3><div class="func-list">`;
+    info.funcs.forEach(fn => {
+      html += `
+        <div class="func">
+          <div class="sig">${escapeHtml(fn.sig)}</div>
+          <div class="desc">${escapeHtml(fn.desc)}</div>
+          ${fn.meta ? `<div class="meta">${escapeHtml(fn.meta)}</div>` : ""}
+        </div>
+      `;
+    });
+    html += `</div></div>`;
+  }
+
+  html += `<div class="section deps-grid-wrap">
+    <h3>의존성</h3>
+    <div class="deps-grid">
+      <div class="dep-list">
+        <h4>↓ 이 파일이 import 하는 것</h4>
+        <ul>${info.imports.map(d => `<li>${escapeHtml(d)}</li>`).join("") || "<li>(없음)</li>"}</ul>
+      </div>
+      <div class="dep-list">
+        <h4>↑ 이 파일을 사용하는 곳</h4>
+        <ul>${info.usedBy.map(d => {
+          const isPath = d.includes("/") && d.endsWith(".py");
+          return `<li class="${isPath ? "linkable" : ""}" data-link="${isPath ? d.split(' ')[0] : ''}">${escapeHtml(d)}</li>`;
+        }).join("") || "<li>(없음)</li>"}</ul>
+      </div>
+    </div>
+  </div>`;
+
+  if (info.snippets.length > 0) {
+    html += `<div class="section"><h3>핵심 코드 스니펫 (클릭하여 펼치기)</h3>`;
+    info.snippets.forEach((sn, i) => {
+      html += `
+        <div class="snippet" data-idx="${i}">
+          <div class="snippet-title" onclick="toggleSnippet(this)">
+            <span class="title-text">📜 ${escapeHtml(sn.title)}</span>
+            <span class="toggle">▾ 펼치기</span>
+          </div>
+          <pre class="snippet-code">${sn.code}</pre>
+        </div>
+      `;
+    });
+    html += `</div>`;
+  }
+
+  detail.innerHTML = html;
+
+  // 사용처 링크 클릭
+  detail.querySelectorAll(".dep-list li.linkable").forEach(li => {
+    li.onclick = () => {
+      const link = li.dataset.link;
+      if (FILES[link]) selectFile(link);
+    };
+  });
+}
+
+function toggleSnippet(headerEl) {
+  const snip = headerEl.closest(".snippet");
+  snip.classList.toggle("open");
+  headerEl.querySelector(".toggle").textContent = snip.classList.contains("open") ? "▴ 접기" : "▾ 펼치기";
+}
+
+function escapeHtml(s) {
+  // s가 이미 HTML 태그 포함하는 경우는 그대로 (snippet code), 일반 텍스트만 escape
+  // 여기서는 안전을 위해 < >만 변환 안 함 (snippet code에 syntax highlight 태그가 있음)
+  return s;
+}
+
+// ════════════════════════════════════════════════════════════════
+// 뷰 전환
+// ════════════════════════════════════════════════════════════════
+function setView(name) {
+  document.querySelectorAll(".view").forEach(v => v.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+  document.getElementById(`view-${name}`).classList.add("active");
+  const tabIdx = ["file", "flow", "call", "home"].indexOf(name);
+  document.querySelectorAll(".tab")[tabIdx].classList.add("active");
+
+  if (name === "flow") drawFlowDiagram();
+  if (name === "call") drawCallView();
+}
+
+// ════════════════════════════════════════════════════════════════
+// 데이터 흐름 다이어그램 (SVG)
+// ════════════════════════════════════════════════════════════════
+const FLOW_NODES = [
+  // x, y, label, sublabel, file, color
+  { x: 60,  y: 50,  w: 160, h: 60, label: "원본 CSV", sub: "CP949, 따릉이/ASOS", file: null, color: "#475569" },
+  { x: 60,  y: 200, w: 160, h: 60, label: "preprocess.py", sub: "정제 + 자치구 필터", file: "src/data/preprocess.py", color: "#22c55e" },
+  { x: 60,  y: 350, w: 160, h: 60, label: "parquet 4종", sub: "stations/trips/demand/weather", file: null, color: "#10b981" },
+
+  { x: 290, y: 200, w: 160, h: 60, label: "geo.py", sub: "Haversine 거리", file: "src/utils/geo.py", color: "#ec4899" },
+  { x: 290, y: 350, w: 160, h: 60, label: "data_loader.py", sub: "EpisodeData numpy 묶음", file: "src/envs/data_loader.py", color: "#3b82f6" },
+
+  { x: 520, y: 350, w: 180, h: 60, label: "rebalance_env.py", sub: "Gymnasium 환경", file: "src/envs/rebalance_env.py", color: "#3b82f6" },
+
+  { x: 770, y: 50,  w: 160, h: 60, label: "baselines.py", sub: "noop / most_imbalanced", file: "src/agents/baselines.py", color: "#a855f7" },
+  { x: 770, y: 200, w: 160, h: 60, label: "masked_dqn.py", sub: "DQN + mask + double Q", file: "src/agents/masked_dqn.py", color: "#a855f7" },
+
+  { x: 770, y: 350, w: 160, h: 60, label: "train.py", sub: "DQN 학습", file: "scripts/train.py", color: "#fbbf24" },
+  { x: 770, y: 470, w: 160, h: 60, label: "export_replay.py", sub: "→ replay.json", file: "scripts/export_replay.py", color: "#fbbf24" },
+
+  { x: 520, y: 50,  w: 160, h: 60, label: "test_env.py", sub: "환경 sanity check", file: "scripts/test_env.py", color: "#fbbf24" },
+  { x: 520, y: 470, w: 160, h: 60, label: "run_baseline.py", sub: "정책 비교", file: "scripts/run_baseline.py", color: "#fbbf24" },
+  { x: 60, y: 470, w: 160, h: 60, label: "run_preprocess.py", sub: "CLI 진입점", file: "scripts/run_preprocess.py", color: "#fbbf24" },
+
+  { x: 980, y: 350, w: 90, h: 60, label: "logs/", sub: ".zip 모델", file: null, color: "#64748b" },
+  { x: 980, y: 470, w: 90, h: 60, label: "docs/", sub: "replay.json", file: null, color: "#64748b" },
+];
+
+const FLOW_EDGES = [
+  [0, 1], [1, 2], [2, 4], [3, 4], [4, 5],
+  [5, 6], [5, 7], [5, 8], [5, 9],
+  [6, 11], [6, 8], // baselines used by test_env (no actually) and train
+  [7, 8], [7, 9],
+  [5, 10], [5, 11],
+  [10, 1],
+  // outputs
+  [8, 13], [9, 14],
+];
+
+function drawFlowDiagram() {
+  const svg = document.getElementById("flow-svg");
+  svg.innerHTML = "";
+
+  // edges
+  FLOW_EDGES.forEach(([a, b]) => {
+    const A = FLOW_NODES[a], B = FLOW_NODES[b];
+    if (!A || !B) return;
+    const x1 = A.x + A.w / 2, y1 = A.y + A.h / 2;
+    const x2 = B.x + B.w / 2, y2 = B.y + B.h / 2;
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    // simple bezier
+    const dx = (x2 - x1) * 0.4;
+    path.setAttribute("d", `M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}`);
+    path.setAttribute("class", "flow-edge");
+    path.setAttribute("marker-end", "url(#arrow)");
+    svg.appendChild(path);
+  });
+
+  // arrow marker
+  const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  defs.innerHTML = `<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5"
+    markerUnits="strokeWidth" markerWidth="6" markerHeight="6" orient="auto">
+    <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+  </marker>`;
+  svg.appendChild(defs);
+
+  // nodes
+  FLOW_NODES.forEach((n, idx) => {
+    const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+    g.setAttribute("class", "flow-node");
+    g.setAttribute("transform", `translate(${n.x}, ${n.y})`);
+    if (n.file) g.style.cursor = "pointer";
+    g.onclick = () => {
+      if (n.file) selectFile(n.file);
+    };
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("width", n.w);
+    rect.setAttribute("height", n.h);
+    rect.setAttribute("rx", 8);
+    rect.setAttribute("fill", n.color);
+    rect.setAttribute("opacity", "0.85");
+    rect.setAttribute("stroke", n.file ? "#fff" : "#475569");
+    rect.setAttribute("stroke-width", n.file ? 1 : 0);
+    g.appendChild(rect);
+    const t1 = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t1.setAttribute("class", "flow-label");
+    t1.setAttribute("x", n.w / 2);
+    t1.setAttribute("y", 25);
+    t1.setAttribute("text-anchor", "middle");
+    t1.textContent = n.label;
+    g.appendChild(t1);
+    const t2 = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t2.setAttribute("class", "flow-sublabel");
+    t2.setAttribute("x", n.w / 2);
+    t2.setAttribute("y", 45);
+    t2.setAttribute("text-anchor", "middle");
+    t2.textContent = n.sub;
+    g.appendChild(t2);
+    svg.appendChild(g);
+  });
+}
+
+// ════════════════════════════════════════════════════════════════
+// 호출 관계 매트릭스
+// ════════════════════════════════════════════════════════════════
+function drawCallView() {
+  const detail = document.getElementById("call-detail");
+  const scripts = Object.entries(FILES).filter(([_, v]) => v.cat === "script");
+  const modules = Object.entries(FILES).filter(([_, v]) => v.cat !== "script" && v.cat !== "config");
+
+  let html = `<div class="call-info">
+    <h3>스크립트 ↔ 모듈 의존 매트릭스</h3>
+    <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 10px;">행: 스크립트 (▶) / 열: 모듈. ● = 직접 import 함</div>
+    <table style="border-collapse: collapse; font-size: 11px; font-family: 'SF Mono', monospace; width: 100%;">
+      <thead><tr><th style="text-align: left; padding: 6px; border-bottom: 1px solid var(--border);"></th>`;
+  modules.forEach(([p]) => {
+    const name = p.split("/").pop().replace(".py", "");
+    html += `<th style="padding: 6px; border-bottom: 1px solid var(--border); writing-mode: vertical-rl; text-orientation: mixed; cursor: pointer; color: var(--text-dim);" onclick="selectFile('${p}')">${name}</th>`;
+  });
+  html += `</tr></thead><tbody>`;
+  scripts.forEach(([scriptPath, scriptInfo]) => {
+    const sname = scriptPath.split("/").pop();
+    html += `<tr><td style="padding: 6px; border-bottom: 1px solid var(--border); cursor: pointer;" onclick="selectFile('${scriptPath}')"><span class="pill pill-script">${sname}</span></td>`;
+    modules.forEach(([modPath, modInfo]) => {
+      // check if scriptPath in modInfo.usedBy OR scriptInfo.imports has module
+      const modName = modPath.split("/").pop().replace(".py", "");
+      const usesIt = modInfo.usedBy.some(u => u.includes(sname) || u.includes(scriptPath));
+      html += `<td style="padding: 6px; text-align: center; border-bottom: 1px solid var(--border); color: ${usesIt ? 'var(--accent)' : 'var(--border)'};">${usesIt ? '●' : '·'}</td>`;
+    });
+    html += `</tr>`;
+  });
+  html += `</tbody></table></div>`;
+
+  // 추가 설명
+  html += `<div class="call-info">
+    <h3>핵심 호출 체인</h3>
+    <div style="font-family: 'SF Mono', monospace; font-size: 11px; line-height: 1.8;">
+      <div style="margin-bottom: 12px;"><b style="color: var(--accent-2);">🔄 전처리 흐름</b><br>
+      <span style="color: var(--text-dim); padding-left: 20px;">사용자 → run_preprocess.py → preprocess.run() → load_stations/load_trips/load_weather → trips_to_demand → parquet 저장</span></div>
+
+      <div style="margin-bottom: 12px;"><b style="color: var(--accent-2);">🔄 학습 흐름</b><br>
+      <span style="color: var(--text-dim); padding-left: 20px;">사용자 → train.py → load_episode (×20 dates) → evaluate_heuristic (most_imbalanced로 baseline 측정) → MaskableDQN.learn() → EvalCallback (5k step마다 평가) → save model.zip</span></div>
+
+      <div style="margin-bottom: 12px;"><b style="color: var(--accent-2);">🔄 환경 1 step 내부</b><br>
+      <span style="color: var(--text-dim); padding-left: 20px;">RebalanceEnv.step(action) → action 적용 → _advance_until_next_decision → 반복 [_tick(): demand replay + 트럭 이동 + _apply_rebalance] → 다음 idle 트럭 → obs 반환</span></div>
+
+      <div style="margin-bottom: 12px;"><b style="color: var(--accent-2);">🔄 Replay export</b><br>
+      <span style="color: var(--text-dim); padding-left: 20px;">사용자 → export_replay.py → load_episode + load(model.zip) → 1 episode 굴리며 매 step snapshot → docs/replay.json</span></div>
+    </div>
+  </div>`;
+
+  detail.innerHTML = html;
+}
+
+// ════════════════════════════════════════════════════════════════
+// 검색
+// ════════════════════════════════════════════════════════════════
+document.getElementById("search").addEventListener("input", e => {
+  renderSidebar(e.target.value);
+});
+
+// ════════════════════════════════════════════════════════════════
+// 초기화
+// ════════════════════════════════════════════════════════════════
+renderSidebar();
+setView("home");
+</script>
+</body>
+</html>

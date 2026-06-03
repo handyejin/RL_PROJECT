@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>따릉이 RL 프로젝트 — 전체 흐름</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #1e293b;
+    --panel-2: #273449;
+    --accent: #38bdf8;
+    --accent-2: #fbbf24;
+    --good: #4ade80;
+    --bad: #f87171;
+    --purple: #a855f7;
+    --pink: #ec4899;
+    --text: #e2e8f0;
+    --text-dim: #94a3b8;
+    --border: #334155;
+    --code-bg: #0a1224;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font-family: -apple-system, "Pretendard", "Apple SD Gothic Neo", sans-serif;
+         font-size: 14px; line-height: 1.6; }
+
+  .layout { display: flex; min-height: 100vh; }
+
+  /* ── Side nav ── */
+  .nav {
+    width: 240px; min-width: 240px;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 20px 16px;
+    position: sticky; top: 0; height: 100vh;
+    overflow-y: auto;
+  }
+  .nav h1 { font-size: 14px; color: var(--accent); margin: 0 0 6px 0; }
+  .nav .subtitle { font-size: 11px; color: var(--text-dim); margin-bottom: 20px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 10px; border-radius: 6px;
+    cursor: pointer; font-size: 12px;
+    color: var(--text-dim);
+    transition: all 0.15s;
+    margin-bottom: 2px;
+    text-decoration: none;
+  }
+  .nav-item:hover { background: var(--panel-2); color: var(--text); }
+  .nav-item.active {
+    background: var(--accent); color: var(--bg); font-weight: 700;
+  }
+  .nav-item .step-num {
+    width: 20px; height: 20px;
+    background: var(--panel-2); border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10px; font-weight: 700; color: var(--text);
+    flex-shrink: 0;
+  }
+  .nav-item.active .step-num { background: var(--bg); color: var(--accent); }
+  .nav-progress {
+    margin-top: 16px;
+    height: 4px; background: var(--border); border-radius: 2px;
+    overflow: hidden;
+  }
+  .nav-progress-fill {
+    height: 100%; background: var(--accent);
+    width: 0%; transition: width 0.2s;
+  }
+  .nav .links {
+    margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border);
+  }
+  .nav .links h3 { font-size: 10px; color: var(--text-dim); text-transform: uppercase; margin: 0 0 8px 0; }
+  .nav .links a { display: block; font-size: 11px; color: var(--accent); text-decoration: none; padding: 3px 0; }
+  .nav .links a:hover { text-decoration: underline; }
+
+  /* ── Main ── */
+  .main {
+    flex: 1; max-width: 960px; margin: 0 auto;
+    padding: 40px 50px;
+  }
+
+  /* ── Hero ── */
+  .hero {
+    background: linear-gradient(135deg, #1e3a5f, #1e293b);
+    border-radius: 12px; padding: 30px;
+    margin-bottom: 40px;
+    border: 1px solid var(--border);
+  }
+  .hero h1 { margin: 0 0 8px 0; font-size: 24px; color: var(--accent); }
+  .hero .subtitle { color: var(--text-dim); font-size: 14px; margin-bottom: 16px; }
+  .hero .one-liner {
+    background: var(--bg); padding: 12px 16px; border-radius: 6px;
+    border-left: 3px solid var(--accent-2);
+    font-size: 13px; line-height: 1.7;
+  }
+
+  /* ── Step ── */
+  .step {
+    background: var(--panel); border-radius: 12px;
+    padding: 28px; margin-bottom: 24px;
+    border: 1px solid var(--border);
+    scroll-margin-top: 20px;
+  }
+  .step-header {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 14px;
+  }
+  .step-badge {
+    width: 36px; height: 36px;
+    background: var(--accent); color: var(--bg);
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 16px;
+    flex-shrink: 0;
+  }
+  .step-header h2 { margin: 0; font-size: 20px; }
+  .step-tagline {
+    color: var(--text-dim); font-size: 13px; margin-bottom: 18px;
+    padding-left: 50px;
+  }
+
+  .why-box {
+    background: var(--bg); border-left: 3px solid var(--accent-2);
+    padding: 10px 14px; border-radius: 0 6px 6px 0;
+    margin-bottom: 16px; font-size: 13px;
+  }
+  .why-box .why-label {
+    font-size: 10px; color: var(--accent-2); text-transform: uppercase;
+    letter-spacing: 0.6px; font-weight: 700;
+  }
+
+  /* ── Visual blocks ── */
+  .visual-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin: 16px 0;
+  }
+  @media (max-width: 680px) { .visual-grid { grid-template-columns: 1fr; } }
+
+  .vbox {
+    background: var(--panel-2); border-radius: 8px; padding: 14px;
+  }
+  .vbox h4 { margin: 0 0 8px 0; font-size: 12px; color: var(--accent-2); text-transform: uppercase; letter-spacing: 0.5px; }
+  .vbox .content { font-size: 13px; line-height: 1.6; }
+
+  /* ── Flow diagram ── */
+  .flow {
+    display: flex; align-items: stretch; gap: 8px;
+    margin: 14px 0; flex-wrap: wrap;
+  }
+  .flow-step {
+    flex: 1; min-width: 140px;
+    background: var(--panel-2); border-radius: 6px;
+    padding: 10px 12px; text-align: center;
+    border: 1px solid var(--border);
+    position: relative;
+  }
+  .flow-step .title { font-weight: 700; font-size: 12px; margin-bottom: 4px; }
+  .flow-step .desc { font-size: 10px; color: var(--text-dim); }
+  .flow-step.color-data { border-color: var(--good); }
+  .flow-step.color-env { border-color: var(--accent); }
+  .flow-step.color-agent { border-color: var(--purple); }
+  .flow-step.color-result { border-color: var(--accent-2); }
+  .flow-arrow {
+    display: flex; align-items: center; color: var(--text-dim);
+    font-size: 20px;
+  }
+
+  /* ── Code snippet ── */
+  details {
+    margin: 10px 0;
+    background: var(--code-bg); border-radius: 6px;
+    overflow: hidden;
+  }
+  details summary {
+    cursor: pointer; padding: 8px 12px;
+    background: var(--panel-2);
+    font-size: 12px; color: var(--accent-2);
+    list-style: none;
+    display: flex; align-items: center; gap: 6px;
+  }
+  details summary::before { content: "▸"; font-size: 10px; transition: transform 0.2s; }
+  details[open] summary::before { transform: rotate(90deg); }
+  details summary:hover { background: var(--border); }
+  details pre {
+    margin: 0; padding: 12px;
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 11px; line-height: 1.55;
+    color: var(--text); overflow-x: auto;
+    white-space: pre;
+  }
+  details pre .kw { color: #c084fc; }
+  details pre .str { color: var(--good); }
+  details pre .num { color: var(--accent-2); }
+  details pre .com { color: var(--text-dim); font-style: italic; }
+  details pre .fn { color: var(--accent); }
+
+  /* ── Tag pills ── */
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 10px;
+    font-size: 10px; margin-right: 4px;
+    font-family: "SF Mono", monospace;
+  }
+  .pill-file { background: var(--panel-2); color: var(--accent); border: 1px solid var(--border); cursor: pointer; }
+  .pill-file:hover { background: var(--accent); color: var(--bg); }
+  .pill-data { background: rgba(74, 222, 128, 0.2); color: var(--good); }
+  .pill-env { background: rgba(56, 189, 248, 0.2); color: var(--accent); }
+  .pill-agent { background: rgba(168, 85, 247, 0.2); color: var(--purple); }
+  .pill-result { background: rgba(251, 191, 36, 0.2); color: var(--accent-2); }
+
+  .files-row { margin-bottom: 14px; }
+
+  /* ── Tables ── */
+  table {
+    width: 100%; border-collapse: collapse;
+    margin: 12px 0; font-size: 12px;
+  }
+  th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+  th { color: var(--accent-2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td.mono { font-family: "SF Mono", monospace; font-size: 11px; }
+  td.bad { color: var(--bad); }
+  td.good { color: var(--good); }
+
+  /* ── Misc ── */
+  .key-points {
+    background: var(--panel-2); border-radius: 6px;
+    padding: 12px 16px; margin: 12px 0;
+  }
+  .key-points h4 { margin: 0 0 8px 0; font-size: 12px; color: var(--good); text-transform: uppercase; }
+  .key-points ul { margin: 0; padding-left: 20px; }
+  .key-points li { margin-bottom: 4px; font-size: 13px; }
+
+  /* SVG diagrams */
+  .svg-wrap { background: var(--code-bg); border-radius: 8px; padding: 12px; margin: 14px 0; }
+  .svg-wrap svg { width: 100%; height: auto; display: block; }
+
+  /* result viewer link */
+  .result-link {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--accent); color: var(--bg);
+    padding: 8px 14px; border-radius: 6px;
+    font-weight: 700; font-size: 12px;
+    text-decoration: none;
+    margin-top: 8px;
+  }
+  .result-link:hover { background: #0ea5e9; }
+
+  .num-stat {
+    display: inline-block; padding: 2px 8px; background: var(--bg);
+    border-radius: 4px; font-family: monospace; font-size: 12px;
+    color: var(--accent-2);
+  }
+
+  .annotation {
+    display: inline-block; padding: 1px 7px;
+    background: var(--panel-2); border-radius: 10px;
+    font-size: 11px; color: var(--text-dim);
+    margin-left: 4px;
+  }
+</style>
+</head>
+<body>
+
+<div class="layout">
+
+  <!-- ════════════ Side nav ════════════ -->
+  <nav class="nav">
+    <h1>📚 프로젝트 흐름</h1>
+    <div class="subtitle">따릉이 재배치 RL</div>
+    <a class="nav-item" href="#step-0" data-step="0">
+      <span class="step-num">0</span>
+      <span>시작하기</span>
+    </a>
+    <a class="nav-item" href="#step-1" data-step="1">
+      <span class="step-num">1</span>
+      <span>문제 정의</span>
+    </a>
+    <a class="nav-item" href="#step-2" data-step="2">
+      <span class="step-num">2</span>
+      <span>데이터 준비</span>
+    </a>
+    <a class="nav-item" href="#step-3" data-step="3">
+      <span class="step-num">3</span>
+      <span>환경 만들기</span>
+    </a>
+    <a class="nav-item" href="#step-4" data-step="4">
+      <span class="step-num">4</span>
+      <span>베이스라인</span>
+    </a>
+    <a class="nav-item" href="#step-5" data-step="5">
+      <span class="step-num">5</span>
+      <span>DQN 학습</span>
+    </a>
+    <a class="nav-item" href="#step-6" data-step="6">
+      <span class="step-num">6</span>
+      <span>결과 분석</span>
+    </a>
+    <a class="nav-item" href="#step-7" data-step="7">
+      <span class="step-num">7</span>
+      <span>다음 단계</span>
+    </a>
+
+    <div class="nav-progress"><div class="nav-progress-fill" id="progress"></div></div>
+
+    <div class="links">
+      <h3>🔗 인터랙티브 문서</h3>
+      <a href="source_guide.html">→ 소스 가이드</a>
+      <a href="training_flow.html">→ 환경 시뮬레이터</a>
+      <a href="replay_viewer.html">→ Replay Viewer</a>
+    </div>
+  </nav>
+
+  <!-- ════════════ Main content ════════════ -->
+  <main class="main">
+
+    <div class="hero" id="step-0">
+      <h1>🚲 따릉이 재배치 강화학습</h1>
+      <div class="subtitle">서울시 공공자전거를 트럭으로 재배치하는 정책을 강화학습으로 학습</div>
+      <div class="one-liner">
+        <b>한 문장으로:</b> 시민이 자전거를 빌리려는데 정류소가 비어있거나(stockout),
+        반납하려는데 가득 차서(full) 불편함을 겪는 일을 최소화하도록,
+        N대의 트럭에게 "어느 정류소로 가서 자전거를 옮길지" 결정하는 정책을 DQN으로 학습.
+      </div>
+      <div class="files-row" style="margin-top: 16px;">
+        <span class="pill pill-data">데이터 (parquet)</span>
+        <span class="pill pill-env">Gymnasium 환경</span>
+        <span class="pill pill-agent">SB3 DQN + Action Mask</span>
+        <span class="pill pill-result">학습 결과 시각화</span>
+      </div>
+    </div>
+
+    <!-- ════════════ Step 1: 문제 정의 ════════════ -->
+    <div class="step" id="step-1">
+      <div class="step-header">
+        <div class="step-badge">1</div>
+        <h2>문제 정의 — 무엇을 풀려는가?</h2>
+      </div>
+      <div class="step-tagline">
+        따릉이 정류소 간 자전거 불균형 → 트럭 N대로 재배치 → 24시간 동안 누적 실패 최소화.
+      </div>
+
+      <div class="visual-grid">
+        <div class="vbox">
+          <h4>😟 현실의 문제</h4>
+          <div class="content">
+            오전 출근시간 → 주거지 정류소는 텅 비고, 회사 밀집 지역은 자전거가 넘쳐 가득.
+            <br>→ <b style="color: var(--bad);">stockout</b>(빌릴 자전거 없음) + <b style="color: var(--accent-2);">full</b>(반납할 자리 없음) 발생.
+          </div>
+        </div>
+        <div class="vbox">
+          <h4>🚛 우리의 해결책</h4>
+          <div class="content">
+            트럭이 자전거를 적재(잉여 정류소) → 하차(부족 정류소).
+            <br>"어느 트럭이, 언제, 어느 정류소로 가야 할까?"를 <b style="color: var(--accent);">DQN</b>이 결정.
+          </div>
+        </div>
+      </div>
+
+      <div class="why-box">
+        <div class="why-label">왜 강화학습?</div>
+        시간대·요일·날씨에 따라 수요 패턴이 복잡하게 변함 → 단순 규칙으론 한계.
+        <b>"어떤 상황에서 어떤 행동이 미래의 누적 실패를 줄이는가"</b>를 직접 학습.
+      </div>
+
+      <div class="key-points">
+        <h4>📐 결정한 설정</h4>
+        <ul>
+          <li>권역: <b>마포구</b> (정류소 146개)</li>
+          <li>트럭: <b>3대</b>, 적재 용량 20대, 속도 25km/h</li>
+          <li>시간 해상도: <b>1 step = 10분</b>, 1 episode = 24시간 = 144 step</li>
+          <li>제어 방식: <b>Parameter Sharing</b> (3대 트럭이 같은 Q-network 공유)</li>
+          <li>Action: 다음 갈 정류소 선택 (적재/하차 수량은 규칙 기반)</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ════════════ Step 2: 데이터 준비 ════════════ -->
+    <div class="step" id="step-2">
+      <div class="step-header">
+        <div class="step-badge">2</div>
+        <h2>데이터 준비 — 원본 CSV → parquet</h2>
+      </div>
+      <div class="step-tagline">
+        서울시·기상청 공공데이터를 학습에 쓸 수 있는 형태로 정제.
+      </div>
+
+      <div class="files-row">
+        <span class="pill pill-file" onclick="goSource('preprocess.py')">📄 src/data/preprocess.py</span>
+        <span class="pill pill-file" onclick="goSource('run_preprocess.py')">📄 scripts/run_preprocess.py</span>
+      </div>
+
+      <div class="flow">
+        <div class="flow-step color-data">
+          <div class="title">원본 CSV</div>
+          <div class="desc">CP949 인코딩<br>정류소·trip·날씨</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step color-data">
+          <div class="title">필터·정제</div>
+          <div class="desc">위경도 0 제거<br>자치구 필터<br>비정상 trip 컷오프</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step color-data">
+          <div class="title">집계</div>
+          <div class="desc">trip → (시각·정류소)별<br>rentals/returns 카운트</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step color-data">
+          <div class="title">parquet 4종</div>
+          <div class="desc">stations / trips<br>demand / weather</div>
+        </div>
+      </div>
+
+      <div class="why-box">
+        <div class="why-label">왜 parquet?</div>
+        CSV 대비 10~30배 작고, 컬럼 타입 유지 + 부분 컬럼 로딩 가능.
+        같은 데이터를 학습마다 반복 로드하므로 빠른 I/O가 중요.
+      </div>
+
+      <details>
+        <summary>주요 변환 보기 — trip → demand 격자</summary>
+        <pre><span class="com"># trip 한 건 = "A 정류소에서 09:15 출발 → B 정류소에서 09:30 도착"</span>
+<span class="com"># 이걸 두 카운트로 분해:</span>
+<span class="com">#   - A 정류소의 rentals 09:10 칸 +1</span>
+<span class="com">#   - B 정류소의 returns 09:30 칸 +1</span>
+
+<span class="kw">def</span> <span class="fn">trips_to_demand</span>(trips, freq=<span class="str">"10min"</span>):
+    starts = trips.groupby([<span class="str">"t_floor_start"</span>, <span class="str">"start_station_id"</span>]).size()  <span class="com"># rentals</span>
+    ends   = trips.groupby([<span class="str">"t_floor_end"</span>,   <span class="str">"end_station_id"</span>]).size()    <span class="com"># returns</span>
+    <span class="kw">return</span> starts.merge(ends, how=<span class="str">"outer"</span>).fillna(<span class="num">0</span>)
+<span class="com"># 결과: (시각, 정류소) × (rentals, returns) sparse 테이블</span></pre>
+      </details>
+
+      <div class="key-points">
+        <h4>💾 출력 파일</h4>
+        <ul>
+          <li><code>stations.parquet</code> — 정류소 마스터 (id, lat, lon, gu)</li>
+          <li><code>demand_10min.parquet</code> ⭐ — <b>학습의 핵심 입력</b>: (시각, 정류소) × (rentals, returns)</li>
+          <li><code>trips.parquet</code> — 개별 trip (분석용)</li>
+          <li><code>weather_10min.parquet</code> — 날씨 (현재 활용 X)</li>
+        </ul>
+      </div>
+
+      <details>
+        <summary>실행 명령</summary>
+        <pre><span class="com"># 마포구 + 영등포구 + 강남구, 10분 step</span>
+python scripts/run_preprocess.py --gu 마포구 영등포구 강남구 --step <span class="num">10</span>min</pre>
+      </details>
+    </div>
+
+    <!-- ════════════ Step 3: 환경 만들기 ════════════ -->
+    <div class="step" id="step-3">
+      <div class="step-header">
+        <div class="step-badge">3</div>
+        <h2>환경 만들기 — 시뮬레이터 구축</h2>
+      </div>
+      <div class="step-tagline">
+        DQN이 "행동을 시도하고 보상을 받는 무대". Gymnasium 표준 인터페이스.
+      </div>
+
+      <div class="files-row">
+        <span class="pill pill-file" onclick="goSource('data_loader.py')">📄 src/envs/data_loader.py</span>
+        <span class="pill pill-file" onclick="goSource('rebalance_env.py')">📄 src/envs/rebalance_env.py</span>
+      </div>
+
+      <div class="why-box">
+        <div class="why-label">두 단계로 나뉨</div>
+        <b>(a) data_loader</b>가 parquet에서 episode 1개분 정적 데이터(정류소, 거리행렬, demand 격자)를 numpy 묶음(EpisodeData)으로 만들고 →
+        <b>(b) RebalanceEnv</b>가 그걸 받아 시뮬레이션 시계를 굴림.
+      </div>
+
+      <h3 style="font-size: 14px; color: var(--accent-2); margin-top: 20px;">RebalanceEnv가 매 step에 하는 일</h3>
+
+      <div class="svg-wrap">
+        <svg viewBox="0 0 800 280" xmlns="http://www.w3.org/2000/svg">
+          <!-- DQN agent -->
+          <rect x="50" y="120" width="120" height="60" rx="8" fill="#a855f7" opacity="0.8"/>
+          <text x="110" y="150" text-anchor="middle" fill="white" font-size="13" font-weight="700">DQN agent</text>
+          <text x="110" y="168" text-anchor="middle" fill="white" font-size="10" opacity="0.8">Q-network</text>
+
+          <!-- Env -->
+          <rect x="300" y="60" width="220" height="180" rx="8" fill="#1e3a5f" stroke="#38bdf8" stroke-width="2"/>
+          <text x="410" y="85" text-anchor="middle" fill="#38bdf8" font-size="13" font-weight="700">RebalanceEnv</text>
+
+          <rect x="320" y="100" width="180" height="30" rx="4" fill="#273449"/>
+          <text x="410" y="120" text-anchor="middle" fill="white" font-size="11">① action 적용 (트럭 출발)</text>
+
+          <rect x="320" y="138" width="180" height="30" rx="4" fill="#273449"/>
+          <text x="410" y="158" text-anchor="middle" fill="white" font-size="11">② 시계 진행 (_tick)</text>
+
+          <rect x="320" y="176" width="180" height="30" rx="4" fill="#273449"/>
+          <text x="410" y="196" text-anchor="middle" fill="white" font-size="11">③ 다음 idle 트럭 찾기</text>
+
+          <text x="410" y="225" text-anchor="middle" fill="#94a3b8" font-size="10">→ obs / reward / done 반환</text>
+
+          <!-- EpisodeData -->
+          <rect x="600" y="120" width="160" height="60" rx="8" fill="#10b981" opacity="0.8"/>
+          <text x="680" y="148" text-anchor="middle" fill="white" font-size="12" font-weight="700">EpisodeData</text>
+          <text x="680" y="166" text-anchor="middle" fill="white" font-size="9" opacity="0.8">rentals/returns 격자</text>
+
+          <!-- Arrows -->
+          <path d="M 170 145 L 300 145" stroke="#a855f7" stroke-width="2" marker-end="url(#arr2)"/>
+          <text x="235" y="138" text-anchor="middle" fill="#a855f7" font-size="11" font-weight="700">action</text>
+
+          <path d="M 300 165 L 170 165" stroke="#38bdf8" stroke-width="2" marker-end="url(#arr2)"/>
+          <text x="235" y="180" text-anchor="middle" fill="#38bdf8" font-size="11" font-weight="700">obs, reward</text>
+
+          <path d="M 600 150 L 520 150" stroke="#10b981" stroke-width="2" marker-end="url(#arr2)"/>
+          <text x="560" y="142" text-anchor="middle" fill="#10b981" font-size="10">read</text>
+
+          <defs>
+            <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+
+      <div class="visual-grid">
+        <div class="vbox">
+          <h4>🎯 Action (Discrete)</h4>
+          <div class="content">
+            <code>0 ~ N-1</code> 중 하나 = "다음 갈 정류소"<br>
+            자기 위치 선택 = 머무름
+          </div>
+        </div>
+        <div class="vbox">
+          <h4>👁 Observation (벡터)</h4>
+          <div class="content">
+            정류소별 자전거 비율, 트럭별 위치/적재/잔여이동/현재차례, sin/cos(시각)<br>
+            모두 [-1, 1] 범위
+          </div>
+        </div>
+      </div>
+
+      <h3 style="font-size: 14px; color: var(--accent-2); margin-top: 20px;">🎁 보상 (모두 음수 = 벌점)</h3>
+      <table>
+        <tr><th>항목</th><th>가중치</th><th>언제 발생</th></tr>
+        <tr><td class="bad">stockout</td><td class="mono">-1.0</td><td>빈 정류소에서 대여 시도 1건당</td></tr>
+        <tr><td class="bad">full</td><td class="mono">-0.8</td><td>가득 정류소에 반납 시도 1건당</td></tr>
+        <tr><td>이동 거리</td><td class="mono">-0.01/km</td><td>트럭 출발 시</td></tr>
+        <tr><td>이동 시간</td><td class="mono">-0.005/step</td><td>트럭 이동 중 매 step</td></tr>
+      </table>
+
+      <div class="why-box">
+        <div class="why-label">1 RL step = 1 트럭의 1 결정</div>
+        Parameter Sharing: 3대 트럭이 <b>같은 Q-network</b>를 공유. 환경이 turn을 관리하다가
+        idle 트럭이 생길 때마다 DQN에 "지금 누구 차례인지(<code>current_truck_onehot</code>)"를 알려주며 결정 요청.
+      </div>
+
+      <details>
+        <summary>step() 핵심 코드</summary>
+        <pre><span class="kw">def</span> <span class="fn">step</span>(self, action):
+    truck = self.trucks[self.current_truck]
+    <span class="com"># ① action 적용: 트럭이 그 정류소로 출발</span>
+    <span class="kw">if</span> action == truck.location:
+        truck.remaining_steps = <span class="num">1</span>        <span class="com"># 머무름</span>
+    <span class="kw">else</span>:
+        steps = self.data.travel_steps[truck.location, action]
+        truck.destination = action
+        truck.remaining_steps = steps
+        reward += w_travel_km * km          <span class="com"># 거리 비용 즉시 청구</span>
+
+    <span class="com"># ② 다음 idle 트럭 생길 때까지 시계 진행</span>
+    <span class="com">#   - _tick() 호출: demand replay + 트럭 이동/도착</span>
+    <span class="com">#   - stockout/full 발생 시 페널티</span>
+    reward_advance, done = self._advance_until_next_decision()
+
+    <span class="kw">return</span> self._get_obs(), reward + reward_advance, done, <span class="kw">False</span>, info</pre>
+      </details>
+
+      <a class="result-link" href="training_flow.html" target="_blank">▶ 5 정류소 미니 시뮬레이터로 직접 확인</a>
+    </div>
+
+    <!-- ════════════ Step 4: 베이스라인 ════════════ -->
+    <div class="step" id="step-4">
+      <div class="step-header">
+        <div class="step-badge">4</div>
+        <h2>베이스라인 — 비교 기준선</h2>
+      </div>
+      <div class="step-tagline">
+        RL과 비교할 비학습 정책. RL이 넘어야 할 합격선.
+      </div>
+
+      <div class="files-row">
+        <span class="pill pill-file" onclick="goSource('baselines.py')">📄 src/agents/baselines.py</span>
+        <span class="pill pill-file" onclick="goSource('run_baseline.py')">📄 scripts/run_baseline.py</span>
+      </div>
+
+      <div class="why-box">
+        <div class="why-label">왜 베이스라인을 먼저?</div>
+        RL은 학습에 시간이 걸리고 결과 분산이 큼. <b>"이 정도는 쉽게 가능"</b>의 기준이 없으면
+        RL 결과가 좋은지 나쁜지 판단 불가. 베이스라인은 즉시 결과 측정 가능.
+      </div>
+
+      <table>
+        <tr><th>정책</th><th>로직</th><th>역할</th></tr>
+        <tr>
+          <td><code>NoopPolicy</code></td>
+          <td>트럭이 자기 위치에 항상 머무름</td>
+          <td>"재배치 자체가 의미 있나?" 검증용</td>
+        </tr>
+        <tr>
+          <td><code>Random</code></td>
+          <td>매번 무작위 정류소</td>
+          <td>최악 정책</td>
+        </tr>
+        <tr>
+          <td><code>MostImbalancedPolicy</code> ⭐</td>
+          <td>빈 트럭→가장 잉여 큰 곳, 가득→가장 부족 큰 곳, 부분→불균형 큰 곳</td>
+          <td>강한 휴리스틱, RL의 목표선</td>
+        </tr>
+      </table>
+
+      <div class="key-points">
+        <h4>🎯 베이스라인 결과 (마포구 7일 평균)</h4>
+        <ul>
+          <li>NO-OP: <span class="num-stat">-매우 안 좋음</span> (그냥 두면 수요 자체 패턴 따라 stockout/full 폭증)</li>
+          <li><b style="color: var(--good);">most_imbalanced: <span class="num-stat">-36.97</span> ⭐</b> — 이게 DQN이 넘어야 할 선</li>
+        </ul>
+      </div>
+
+      <details>
+        <summary>most_imbalanced 핵심 코드</summary>
+        <pre><span class="kw">def</span> <span class="fn">act</span>(self, env):
+    truck = env.trucks[env.current_truck]
+    bikes = env.bikes
+    target = env.data.capacity * <span class="num">0.5</span>      <span class="com"># 목표: 절반</span>
+
+    <span class="com"># 트럭 적재 상태에 따라 점수 계산</span>
+    <span class="kw">if</span> truck.load == <span class="num">0</span>:
+        scores = bikes - target           <span class="com"># 잉여 큰 곳일수록 좋음 (가서 적재)</span>
+    <span class="kw">elif</span> truck.load >= capacity:
+        scores = target - bikes           <span class="com"># 부족 큰 곳일수록 좋음 (가서 하차)</span>
+    <span class="kw">else</span>:
+        scores = np.abs(bikes - target)   <span class="com"># 불균형 큰 곳</span>
+
+    <span class="com"># 다른 트럭이 가는 곳은 제외 (중복 방지)</span>
+    scores[truck.location] = -np.inf
+    <span class="kw">for</span> i, other <span class="kw">in</span> enumerate(env.trucks):
+        <span class="kw">if</span> i != env.current_truck <span class="kw">and not</span> other.is_idle:
+            scores[other.destination] = -np.inf
+
+    <span class="kw">return</span> int(np.argmax(scores))</pre>
+      </details>
+    </div>
+
+    <!-- ════════════ Step 5: DQN 학습 ════════════ -->
+    <div class="step" id="step-5">
+      <div class="step-header">
+        <div class="step-badge">5</div>
+        <h2>DQN 학습 — 강화학습으로 정책 학습</h2>
+      </div>
+      <div class="step-tagline">
+        SB3 DQN + action mask + Double Q. ε-greedy 탐색으로 buffer 채우면서 Q-network 업데이트.
+      </div>
+
+      <div class="files-row">
+        <span class="pill pill-file" onclick="goSource('masked_dqn.py')">📄 src/agents/masked_dqn.py</span>
+        <span class="pill pill-file" onclick="goSource('train.py')">📄 scripts/train.py</span>
+      </div>
+
+      <h3 style="font-size: 14px; color: var(--accent-2); margin-top: 8px;">학습 루프 (DQN의 4단계 사이클)</h3>
+
+      <div class="svg-wrap">
+        <svg viewBox="0 0 800 380" xmlns="http://www.w3.org/2000/svg">
+          <!-- step 1: collect -->
+          <rect x="50" y="40" width="160" height="60" rx="8" fill="#3b82f6" opacity="0.85"/>
+          <text x="130" y="65" text-anchor="middle" fill="white" font-size="12" font-weight="700">① 환경에서 수집</text>
+          <text x="130" y="82" text-anchor="middle" fill="white" font-size="10" opacity="0.85">ε-greedy로 action</text>
+
+          <!-- step 2: buffer -->
+          <rect x="280" y="40" width="160" height="60" rx="8" fill="#a855f7" opacity="0.85"/>
+          <text x="360" y="65" text-anchor="middle" fill="white" font-size="12" font-weight="700">② replay buffer 저장</text>
+          <text x="360" y="82" text-anchor="middle" fill="white" font-size="10" opacity="0.85">(s, a, r, s') × 100k</text>
+
+          <!-- step 3: train -->
+          <rect x="510" y="40" width="160" height="60" rx="8" fill="#ec4899" opacity="0.85"/>
+          <text x="590" y="65" text-anchor="middle" fill="white" font-size="12" font-weight="700">③ 학습 (Q-net 업데이트)</text>
+          <text x="590" y="82" text-anchor="middle" fill="white" font-size="10" opacity="0.85">target Q로 부트스트랩</text>
+
+          <!-- step 4: eval -->
+          <rect x="280" y="180" width="160" height="60" rx="8" fill="#fbbf24" opacity="0.85"/>
+          <text x="360" y="205" text-anchor="middle" fill="#0f172a" font-size="12" font-weight="700">④ 평가 (5k step마다)</text>
+          <text x="360" y="222" text-anchor="middle" fill="#0f172a" font-size="10" opacity="0.85">7일 셋 평균 reward</text>
+
+          <!-- arrows -->
+          <path d="M 210 70 L 280 70" stroke="#94a3b8" stroke-width="2" marker-end="url(#a3)"/>
+          <path d="M 440 70 L 510 70" stroke="#94a3b8" stroke-width="2" marker-end="url(#a3)"/>
+          <path d="M 590 100 L 590 130 L 360 130 L 360 180" stroke="#94a3b8" stroke-width="2" marker-end="url(#a3)" fill="none"/>
+          <path d="M 280 210 L 130 210 L 130 100" stroke="#fbbf24" stroke-width="2" marker-end="url(#a3)" fill="none"/>
+
+          <!-- bottom: hyperparams -->
+          <rect x="50" y="280" width="700" height="80" rx="8" fill="#0a1224" stroke="#334155"/>
+          <text x="60" y="305" fill="#fbbf24" font-size="11" font-weight="700">하이퍼파라미터</text>
+          <text x="60" y="325" fill="white" font-size="10" font-family="monospace">lr=1e-4   gamma=0.99   batch=64   buffer=100,000   train_freq=4</text>
+          <text x="60" y="342" fill="white" font-size="10" font-family="monospace">target_update=1,000   ε: 1.0 → 0.05 over 30%   MLP [256, 256]</text>
+
+          <defs>
+            <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+
+      <div class="visual-grid">
+        <div class="vbox">
+          <h4>🎭 MaskableDQN (자체 구현)</h4>
+          <div class="content">
+            SB3 DQN에 action mask 추가.
+            다른 트럭이 가는 정류소의 Q값을 <code>-inf</code>로 처리해서
+            argmax가 안 고르게 함. + Double DQN 옵션.
+          </div>
+        </div>
+        <div class="vbox">
+          <h4>📅 데이터 분할</h4>
+          <div class="content">
+            <b>train</b>: 1~2월 중 20일 (reset마다 회전)<br>
+            <b>eval</b>: 1/13~1/19 7일 고정<br>
+            → 매 5k step마다 자동 평가
+          </div>
+        </div>
+      </div>
+
+      <div class="why-box">
+        <div class="why-label">ε-greedy 탐색</div>
+        학습 초반: 무작위 행동 위주 (ε=1.0) → buffer를 다양한 transition으로 채움.<br>
+        후반: ε=0.05 → 학습된 Q값 따라 최선의 action 선택 (활용).<br>
+        SB3 DQN은 ε를 처음 30% step 동안 1.0→0.05로 선형 감소.
+      </div>
+
+      <details>
+        <summary>학습 실행 명령</summary>
+        <pre><span class="com"># vanilla DQN (마스크 없음, 기준선)</span>
+python scripts/train.py --algo dqn --tag baseline_v1
+
+<span class="com"># MaskableDQN + Double Q (권장)</span>
+python scripts/train.py --algo masked_dqn --double-q --tag mapo_masked_v1
+
+<span class="com"># TensorBoard로 학습 곡선 모니터링</span>
+tensorboard --logdir logs</pre>
+      </details>
+
+      <details>
+        <summary>train.py가 하는 일 (4단계)</summary>
+        <pre><span class="num">[1/4]</span> episodes 로드  <span class="com"># load_episode × 20개 날짜 + 7개 평가 날짜</span>
+<span class="num">[2/4]</span> 휴리스틱 baseline 측정  <span class="com"># 학습 중 비교 기준 (-36.97)</span>
+<span class="num">[3/4]</span> DQN 학습  <span class="com"># model.learn(100k step) — 콜백이 5k마다 평가</span>
+<span class="num">[4/4]</span> 모델·history 저장  <span class="com"># logs/&lt;tag&gt;/{best/, dqn_final.zip, history.npy}</span></pre>
+      </details>
+    </div>
+
+    <!-- ════════════ Step 6: 결과 분석 ════════════ -->
+    <div class="step" id="step-6">
+      <div class="step-header">
+        <div class="step-badge">6</div>
+        <h2>결과 분석 — 학습이 잘 됐나?</h2>
+      </div>
+      <div class="step-tagline">
+        TensorBoard 학습 곡선 + replay viewer로 실제 정책 행동 확인.
+      </div>
+
+      <div class="files-row">
+        <span class="pill pill-file" onclick="goSource('export_replay.py')">📄 scripts/export_replay.py</span>
+      </div>
+
+      <h3 style="font-size: 14px; color: var(--accent-2); margin-top: 8px;">현재 학습 상태 (dqn_long, 500k step)</h3>
+
+      <table>
+        <tr><th>지표</th><th>값</th><th>비교</th></tr>
+        <tr><td>휴리스틱</td><td class="mono good">-36.97</td><td>목표선</td></tr>
+        <tr><td>DQN best (step 150k)</td><td class="mono bad">-139.5</td><td>Δ = -102.5 ❌</td></tr>
+        <tr><td>DQN final (step 500k)</td><td class="mono bad">-219.6</td><td>Δ = -182.6 ❌❌</td></tr>
+      </table>
+
+      <div class="why-box" style="border-left-color: var(--bad);">
+        <div class="why-label" style="color: var(--bad);">⚠ 학습 실패</div>
+        DQN이 휴리스틱을 한참 못 따라잡음. 게다가 step 150k 이후 <b>오히려 나빠짐</b> (발산).<br>
+        replay viewer로 확인해보면 트럭들이 <b>146개 중 7개 정류소에만</b> 몰려있는 게 드러남 → 정책 collapse.
+      </div>
+
+      <h3 style="font-size: 14px; color: var(--accent-2);">정책 collapse의 증거 (replay 분석)</h3>
+      <table>
+        <tr><th>트럭</th><th>가장 자주 간 곳</th><th>비율</th></tr>
+        <tr><td>0</td><td class="mono">ST-2162</td><td class="bad">74.5%</td></tr>
+        <tr><td>1</td><td class="mono">ST-2162</td><td class="bad">72.0%</td></tr>
+        <tr><td>2</td><td class="mono">ST-18</td><td class="bad">67.6%</td></tr>
+      </table>
+      <div style="font-size: 12px; color: var(--text-dim); margin-top: 4px;">
+        → 24시간 동안 146개 정류소 중 <b>단 7개만 방문</b>, 동시에 같은 정류소에 모이는 비율 67.6%.
+      </div>
+
+      <a class="result-link" href="replay_viewer.html" target="_blank">🎬 Replay Viewer로 실제 episode 확인</a>
+
+      <h3 style="font-size: 14px; color: var(--accent-2); margin-top: 24px;">원인 진단 (영향 큰 순)</h3>
+      <div class="key-points">
+        <ul>
+          <li><b>① action mask placeholder였음</b> — 학습 당시 마스크가 작동 안 해서 무의미 action에 학습 신호 낭비</li>
+          <li><b>② Double DQN 없음</b> — Q value 과대추정 → 특정 정류소만 비현실적으로 좋다고 학습</li>
+          <li><b>③ 휴리스틱이 너무 강함</b> — DQN이 비슷한 수준 되기 전에 발산</li>
+          <li><b>④ travel_step=-0.005</b> — "안 움직이는 정책"으로 끌어당기는 힘</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- ════════════ Step 7: 다음 ════════════ -->
+    <div class="step" id="step-7">
+      <div class="step-header">
+        <div class="step-badge">7</div>
+        <h2>다음 단계 — 어떻게 개선할까?</h2>
+      </div>
+      <div class="step-tagline">
+        진단 결과를 바탕으로 차근차근 시도해볼 것들.
+      </div>
+
+      <div class="visual-grid">
+        <div class="vbox">
+          <h4>🔧 우선 시도</h4>
+          <div class="content" style="font-size: 12px; line-height: 1.7;">
+            1. <code>--algo masked_dqn --double-q</code>로 재학습<br>
+            2. 학습 곡선이 더 안정적인지 확인<br>
+            3. replay viewer로 정류소 다양성 확인
+          </div>
+        </div>
+        <div class="vbox">
+          <h4>🧪 ablation 실험</h4>
+          <div class="content" style="font-size: 12px; line-height: 1.7;">
+            • <code>--no-action-mask</code>로 mask 효과 측정<br>
+            • <code>--w-travel-step 0</code>로 발산 완화 효과<br>
+            • Dueling DQN 비교 (Phase 5)
+          </div>
+        </div>
+        <div class="vbox">
+          <h4>📈 observation 확장</h4>
+          <div class="content" style="font-size: 12px; line-height: 1.7;">
+            현재 obs에 <b>수요 예측 feature</b> 추가:<br>
+            "다음 H step 예상 rentals/returns" → 선제 대응 가능
+          </div>
+        </div>
+        <div class="vbox">
+          <h4>🗺 다중 권역 확장</h4>
+          <div class="content" style="font-size: 12px; line-height: 1.7;">
+            마포구·영등포구·강남구 각각 학습 → 정책 비교 → 통합 정책 가능성
+          </div>
+        </div>
+      </div>
+
+      <div class="why-box">
+        <div class="why-label">측정 가능한 목표</div>
+        <b>"DQN best가 휴리스틱(-36.97)을 초과하는 시점"</b>을 1차 목표로.
+        Δ > 0 되면 ✅. 그 이후 stockout/full 개별 지표, 분산, 학습 안정성 등을 정밀화.
+      </div>
+
+      <div class="files-row" style="margin-top: 20px;">
+        <a class="result-link" href="source_guide.html" target="_blank">📚 소스 가이드로 이동</a>
+        <a class="result-link" href="replay_viewer.html" target="_blank" style="background: var(--purple);">🎬 Replay Viewer</a>
+        <a class="result-link" href="training_flow.html" target="_blank" style="background: var(--good);">🎮 환경 시뮬레이터</a>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<script>
+// 스크롤 시 사이드 네비 활성화 & 진행률 업데이트
+const sections = document.querySelectorAll(".step, .hero");
+const navItems = document.querySelectorAll(".nav-item");
+
+function updateActive() {
+  const scrollY = window.scrollY;
+  let activeIdx = 0;
+  sections.forEach((sec, i) => {
+    const rect = sec.getBoundingClientRect();
+    if (rect.top < window.innerHeight * 0.4) activeIdx = i;
+  });
+  navItems.forEach((n, i) => n.classList.toggle("active", i === activeIdx));
+
+  // 진행률
+  const docH = document.documentElement.scrollHeight - window.innerHeight;
+  const pct = Math.min(100, (scrollY / docH) * 100);
+  document.getElementById("progress").style.width = pct + "%";
+}
+
+window.addEventListener("scroll", updateActive, { passive: true });
+window.addEventListener("load", updateActive);
+
+// 부드러운 스크롤
+navItems.forEach(item => {
+  item.addEventListener("click", e => {
+    e.preventDefault();
+    const target = document.querySelector(item.getAttribute("href"));
+    if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+});
+
+// pill click → source guide로 이동 (해당 파일 하이라이트 어렵지만 페이지만 열기)
+function goSource(fname) {
+  window.open(`source_guide.html`, "_blank");
+}
+</script>
+</body>
+</html>
