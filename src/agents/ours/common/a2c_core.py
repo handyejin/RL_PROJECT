@@ -206,11 +206,17 @@ def make_env(ep, args: argparse.Namespace, seed: int | None = None, for_eval: bo
     return maybe_wrap_candidate_actions(env, args)
 
 
-def load_episodes(dates: list[str], district: str, processed_dir: str = "data/processed") -> list:
+def load_episodes(
+    dates: list[str],
+    district: str,
+    processed_dir: str = "data/processed",
+    progress_label: str | None = None,
+) -> list:
     """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
+    date_iter = tqdm(dates, desc=progress_label, unit="day") if progress_label else dates
     return [
         load_episode(processed_dir, district=district, episode_start=f"{date} 00:00")
-        for date in dates
+        for date in date_iter
     ]
 
 
@@ -645,9 +651,28 @@ def main() -> None:
         f"(train={len(train_dates)}, val={len(val_dates)}, eval={len(EVAL_DATES)})...",
         flush=True,
     )
-    train_episodes = load_episodes(train_dates, args.district, args.processed_dir)
-    bc_val_episodes = load_episodes(val_dates, args.district, args.processed_dir) if args.bc_val_dates > 0 else []
-    eval_episodes = load_episodes(EVAL_DATES, args.district, args.processed_dir)
+    train_episodes = load_episodes(
+        train_dates,
+        args.district,
+        args.processed_dir,
+        f"A2C {args.district} load train" if args.progress else None,
+    )
+    bc_val_episodes = (
+        load_episodes(
+            val_dates,
+            args.district,
+            args.processed_dir,
+            f"A2C {args.district} load val" if args.progress else None,
+        )
+        if args.bc_val_dates > 0
+        else []
+    )
+    eval_episodes = load_episodes(
+        EVAL_DATES,
+        args.district,
+        args.processed_dir,
+        f"A2C {args.district} load eval" if args.progress else None,
+    )
     all_episodes = train_episodes + bc_val_episodes + eval_episodes
     print(f"[A2C:{args.district}] applying capacity/forecast data...", flush=True)
     capacity_stats = apply_capacity_override(
