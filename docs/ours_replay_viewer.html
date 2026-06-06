@@ -242,7 +242,7 @@
         <div><span class="dot empty"></span>재고 비율 낮음</div>
         <div><span class="dot balanced"></span>목표 재고 근처</div>
         <div><span class="dot full"></span>재고 비율 높음</div>
-        <div><span class="dot candidate"></span>현재 Top-K 후보</div>
+        <div><span class="dot candidate"></span>현재 Top-K 후보(파란 테두리)</div>
       </div>
       <div class="hint">
         원 크기는 정류소 capacity에 비례하고, 파란 테두리는 현재 정책이 고려한 Top-K 후보입니다.
@@ -355,17 +355,29 @@
         const bikes = Number(snap.bikes[i] || 0);
         const ratio = bikes / cap;
         const baseRadius = 3.5 + Math.sqrt(cap / maxCap) * 7;
+        const isCandidate = candidateSet.has(i);
+        if (isCandidate) {
+          svg.appendChild(make("circle", {
+            cx: x, cy: y, r: baseRadius + 5,
+            fill: "#2f6fed",
+            "fill-opacity": 0.14,
+            stroke: "#2f6fed",
+            "stroke-width": 2,
+            "stroke-opacity": 0.85,
+            "pointer-events": "none",
+          }));
+        }
         const circle = make("circle", {
           cx: x, cy: y, r: baseRadius,
           fill: stationColor(ratio),
           "fill-opacity": 0.72,
-          stroke: candidateSet.has(i) ? "#2f6fed" : "#ffffff",
-          "stroke-width": candidateSet.has(i) ? 3 : 1,
+          stroke: isCandidate ? "#2f6fed" : "#ffffff",
+          "stroke-width": isCandidate ? 4 : 1,
           cursor: "pointer",
           "data-station-index": i,
           "data-base-radius": baseRadius,
-          "data-base-stroke": candidateSet.has(i) ? "#2f6fed" : "#ffffff",
-          "data-base-stroke-width": candidateSet.has(i) ? 3 : 1,
+          "data-base-stroke": isCandidate ? "#2f6fed" : "#ffffff",
+          "data-base-stroke-width": isCandidate ? 4 : 1,
         });
         circle.appendChild(document.createElementNS(SVG_NS, "title"))
           .textContent = `${meta.station_ids[i]} bikes=${bikes}/${cap}`;
