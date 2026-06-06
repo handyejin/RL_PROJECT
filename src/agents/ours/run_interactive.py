@@ -1,4 +1,4 @@
-"""REINFORCE/A2C 실험을 쉽게 실행하는 터미널 wrapper.
+"""REINFORCE/A2C/DQN/PPO 실험을 쉽게 실행하는 터미널 wrapper.
 
 목적:
     팀원이 내부 core 옵션을 모두 외우지 않아도, 알고리즘과 구만 선택해서
@@ -15,6 +15,8 @@
 실행 예:
     PYTHONPATH=. python -m src.agents.ours.run_interactive
     PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm a2c --district 영등포구
+    PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm dqn --district 영등포구
+    PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm ppo --district 영등포구
     PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm reinforce --district ALL
 """
 
@@ -69,8 +71,16 @@ def choose_algorithm() -> str:
     print("\n알고리즘을 선택하세요.")
     print("  1. REINFORCE")
     print("  2. A2C")
-    choice = input("선택 [1/2]: ").strip()
-    return "reinforce" if choice == "1" else "a2c"
+    print("  3. DQN (Double DQN)")
+    print("  4. PPO")
+    choice = input("선택 [1/2/3/4]: ").strip()
+    if choice == "1":
+        return "reinforce"
+    if choice == "3":
+        return "dqn"
+    if choice == "4":
+        return "ppo"
+    return "a2c"
 
 
 def choose_district() -> str:
@@ -96,9 +106,13 @@ def choose_district() -> str:
 
 def build_command(args: argparse.Namespace, district: str) -> list[str]:
     """선택한 알고리즘/구에 맞는 core 실행 명령을 만든다."""
-    module = "src.agents.ours.common.a2c_core"
-    if args.algorithm == "reinforce":
-        module = "src.agents.ours.common.reinforce_core"
+    module_by_algorithm = {
+        "reinforce": "src.agents.ours.common.reinforce_core",
+        "a2c": "src.agents.ours.common.a2c_core",
+        "dqn": "src.agents.ours.common.dqn_core",
+        "ppo": "src.agents.ours.common.ppo_core",
+    }
+    module = module_by_algorithm[args.algorithm]
 
     forecast_path = project_path(args.forecast_dir) / f"demand_forecast_1h_{district}.parquet"
     processed_dir = project_path(args.processed_dir)
@@ -113,10 +127,6 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
         str(processed_dir),
         "--district",
         district,
-        "--episodes",
-        str(args.episodes),
-        "--eval-every",
-        str(args.eval_every),
         "--n-train-dates",
         str(args.n_train_dates),
         "--bc-epochs",
@@ -141,12 +151,29 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
         "1.0",
         "--candidate-feature-mode",
         "basic",
-        "--normalize-advantages",
         "--tag",
         tag,
         "--device",
         args.device,
     ]
+    if args.algorithm in {"reinforce", "a2c"}:
+        cmd += [
+            "--episodes",
+            str(args.episodes),
+            "--eval-every",
+            str(args.eval_every),
+            "--normalize-advantages",
+        ]
+    else:
+        cmd += [
+            "--total-timesteps",
+            str(args.total_timesteps),
+            "--eval-every",
+            str(args.eval_every_timesteps),
+        ]
+    if args.algorithm == "dqn":
+        # dqn_core의 기본값도 Double DQN이지만, 실행 로그에서 분명히 보이도록 명시한다.
+        cmd.append("--double-q")
     if args.algorithm == "a2c":
         cmd += ["--bc-val-dates", "0", "--anchor-coef", "0.0"]
     if args.progress:
@@ -176,14 +203,16 @@ def ensure_inputs(args: argparse.Namespace, district: str) -> bool:
 
 def parse_args() -> argparse.Namespace:
     """대화형 실행과 명령형 실행을 모두 지원하는 옵션을 정의한다."""
-    parser = argparse.ArgumentParser(description="Interactive runner for our REINFORCE/A2C experiments.")
-    parser.add_argument("--algorithm", choices=["reinforce", "a2c"], default="")
+    parser = argparse.ArgumentParser(description="Interactive runner for our RL experiments.")
+    parser.add_argument("--algorithm", choices=["reinforce", "a2c", "dqn", "ppo"], default="")
     parser.add_argument("--district", default="")
     parser.add_argument("--processed-dir", default="data/processed_seoul_all")
     parser.add_argument("--forecast-dir", default="data/forecast_by_gu")
     parser.add_argument("--capacity-path", default="data/processed/station_capacity.csv")
     parser.add_argument("--episodes", type=int, default=500)
+    parser.add_argument("--total-timesteps", type=int, default=170_000)
     parser.add_argument("--eval-every", type=int, default=50)
+    parser.add_argument("--eval-every-timesteps", type=int, default=20_000)
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--candidate-top-k", type=int, default=12)
     parser.add_argument("--tag", default="interactive")
@@ -204,7 +233,14 @@ def main() -> None:
     districts = DISTRICTS if args.district.upper() == "ALL" else [args.district]
     print(f"\n실행 알고리즘: {args.algorithm.upper()}")
     print(f"실행 지역: {', '.join(districts)}")
-    print(f"episodes={args.episodes}, eval_every={args.eval_every}, top_k={args.candidate_top_k}")
+    if args.algorithm in {"reinforce", "a2c"}:
+        print(f"episodes={args.episodes}, eval_every={args.eval_every}, top_k={args.candidate_top_k}")
+    else:
+        print(
+            f"timesteps={args.total_timesteps}, "
+            f"eval_every_timesteps={args.eval_every_timesteps}, "
+            f"top_k={args.candidate_top_k}"
+        )
 
     for index, district in enumerate(districts, start=1):
         print("\n" + "=" * 80)

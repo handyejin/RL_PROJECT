@@ -2,12 +2,14 @@
 
 이 문서는 `src/agents/ours/` 아래에 추가한 실험 코드를 팀원이 재현하기 위한 실행 순서이다.
 
-핵심 목표는 다음 두 알고리즘을 수정 state에서 실행하는 것이다.
+핵심 목표는 다음 알고리즘을 수정 state에서 실행하는 것이다.
 
 | 알고리즘 | 설명 |
 |---|---|
 | REINFORCE | Reward-to-Go와 Value Network baseline을 사용하는 policy gradient |
 | A2C | Actor-Critic 구조, `r + gamma V(s') - V(s)` advantage 사용 |
+| DQN | action mask를 적용한 Double DQN |
+| PPO | action mask를 적용한 MaskablePPO |
 
 ## 1. 실험에서 사용하는 데이터
 
@@ -82,6 +84,8 @@ PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
 ```text
 1. REINFORCE
 2. A2C
+3. DQN (Double DQN)
+4. PPO
 
 1. ALL
 2. 영등포구
@@ -112,6 +116,28 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
   --progress
 ```
 
+DQN은 timestep 기준으로 실행한다. 기본값은 Double DQN이다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+  --algorithm dqn \
+  --district 영등포구 \
+  --total-timesteps 170000 \
+  --eval-every-timesteps 20000 \
+  --progress
+```
+
+PPO도 timestep 기준으로 실행한다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+  --algorithm ppo \
+  --district 영등포구 \
+  --total-timesteps 170000 \
+  --eval-every-timesteps 20000 \
+  --progress
+```
+
 25개 구 전체를 순차 실행하려면:
 
 ```bash
@@ -125,7 +151,9 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
 
 ## 5. 진행률 확인
 
-`--progress` 옵션을 사용하면 `tqdm`으로 episode 진행률을 볼 수 있다.
+`--progress` 옵션을 사용하면 `tqdm`으로 진행률을 볼 수 있다.
+
+REINFORCE/A2C는 episode 기준, DQN/PPO는 timestep 기준으로 표시된다.
 
 표시되는 값은 다음과 같다.
 
@@ -140,6 +168,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
 
 ```text
 A2C 영등포구: 50/500 [eval=-2390.2, base=-2440.1, delta=+49.9, best=+49.9]
+DQN 영등포구: 20000/170000 [eval=-2393.2, base=-2440.1, delta=+46.9, best=+46.9]
 ```
 
 ## 6. Baseline 해석
@@ -170,6 +199,14 @@ logs/a2c_{tag}/actor_critic_final.pt
 logs/reinforce_{tag}/history.npy
 logs/reinforce_{tag}/best/best_model.pt
 logs/reinforce_{tag}/reinforce_final.pt
+
+logs/dqn_{tag}/history.npy
+logs/dqn_{tag}/best_model.zip
+logs/dqn_{tag}/final_model.zip
+
+logs/ppo_{tag}/history.npy
+logs/ppo_{tag}/best_model.zip
+logs/ppo_{tag}/final_model.zip
 ```
 
 `logs/`와 모델 파일은 git에 올리지 않는다.

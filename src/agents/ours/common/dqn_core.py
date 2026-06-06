@@ -35,6 +35,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from stable_baselines3.common.vec_env import DummyVecEnv
+from tqdm.auto import tqdm
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.agents.baselines import get_policy
@@ -258,6 +259,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rollback-to-best-on-eval", action="store_true")
     parser.add_argument("--finetune-patience", type=int, default=0)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps"])
+    parser.add_argument("--progress", action="store_true")
     return parser.parse_args()
 
 
@@ -347,28 +349,52 @@ def main() -> None:
         return
 
     steps_done = 0
-    while steps_done < args.total_timesteps:
-        chunk = min(args.eval_every, args.total_timesteps - steps_done)
-        model.learn(total_timesteps=chunk, reset_num_timesteps=False, progress_bar=False)
-        steps_done += chunk
-        eval_reward, eval_rewards = evaluate(model, eval_episodes, args, args.seed)
-        history.append({"timesteps": steps_done, "eval_reward": eval_reward})
-        if eval_reward > best_reward:
-            best_reward = eval_reward
-            best_step = steps_done
-            best_policy_state = copy.deepcopy(model.policy.state_dict())
-            patience_left = args.finetune_patience
-            model.save(out_dir / "best_model")
-        else:
-            if args.rollback_to_best_on_eval:
-                # DQN fine-tuning이 BC policy를 망가뜨리면 best Q-network로 되돌린다.
-                model.policy.load_state_dict(best_policy_state)
-            if args.finetune_patience > 0:
-                patience_left -= 1
-        print(f"timesteps={steps_done:7d} eval={eval_reward:8.2f}")
-        if args.finetune_patience > 0 and patience_left <= 0:
-            print(f"fine-tuning early stop: best_step={best_step}, best_reward={best_reward:.2f}")
-            break
+    progress_bar = None
+    if args.progress:
+        progress_bar = tqdm(
+            total=args.total_timesteps,
+            desc=f"DQN {args.district}",
+            unit="step",
+            dynamic_ncols=True,
+        )
+    try:
+        while steps_done < args.total_timesteps:
+            chunk = min(args.eval_every, args.total_timesteps - steps_done)
+            model.learn(total_timesteps=chunk, reset_num_timesteps=False, progress_bar=False)
+            steps_done += chunk
+            if progress_bar is not None:
+                progress_bar.update(chunk)
+            eval_reward, eval_rewards = evaluate(model, eval_episodes, args, args.seed)
+            history.append({"timesteps": steps_done, "eval_reward": eval_reward})
+            if eval_reward > best_reward:
+                best_reward = eval_reward
+                best_step = steps_done
+                best_policy_state = copy.deepcopy(model.policy.state_dict())
+                patience_left = args.finetune_patience
+                model.save(out_dir / "best_model")
+            else:
+                if args.rollback_to_best_on_eval:
+                    # DQN fine-tuning이 BC policy를 망가뜨리면 best Q-network로 되돌린다.
+                    model.policy.load_state_dict(best_policy_state)
+                if args.finetune_patience > 0:
+                    patience_left -= 1
+            delta = eval_reward - heuristic_mean
+            if progress_bar is not None:
+                progress_bar.set_postfix(
+                    eval=f"{eval_reward:.1f}",
+                    base=f"{heuristic_mean:.1f}",
+                    delta=f"{delta:+.1f}",
+                    best=f"{best_reward - heuristic_mean:+.1f}",
+                )
+                tqdm.write(f"timesteps={steps_done:7d} eval={eval_reward:8.2f} delta={delta:+8.2f}")
+            else:
+                print(f"timesteps={steps_done:7d} eval={eval_reward:8.2f}")
+            if args.finetune_patience > 0 and patience_left <= 0:
+                print(f"fine-tuning early stop: best_step={best_step}, best_reward={best_reward:.2f}")
+                break
+    finally:
+        if progress_bar is not None:
+            progress_bar.close()
 
     final_mean, final_rewards = evaluate(model, eval_episodes, args, args.seed)
     model.save(out_dir / "final_model")
