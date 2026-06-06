@@ -57,6 +57,12 @@ DISTRICTS = [
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 
+def project_path(path: str | Path) -> Path:
+    """상대경로를 프로젝트 루트 기준 절대경로로 변환한다."""
+    p = Path(path)
+    return p if p.is_absolute() else PROJECT_ROOT / p
+
+
 def choose_algorithm() -> str:
     """터미널에서 실행할 알고리즘을 선택한다."""
     print("\n알고리즘을 선택하세요.")
@@ -93,7 +99,9 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
     if args.algorithm == "reinforce":
         module = "src.agents.ours.common.reinforce_core"
 
-    forecast_path = Path(args.forecast_dir) / f"demand_forecast_1h_{district}.parquet"
+    forecast_path = project_path(args.forecast_dir) / f"demand_forecast_1h_{district}.parquet"
+    processed_dir = project_path(args.processed_dir)
+    capacity_path = project_path(args.capacity_path)
     tag = f"{args.tag}_{args.algorithm}_{district}"
 
     cmd = [
@@ -101,7 +109,7 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
         "-m",
         module,
         "--processed-dir",
-        args.processed_dir,
+        str(processed_dir),
         "--district",
         district,
         "--episodes",
@@ -117,7 +125,7 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
         "--future-horizon",
         "6",
         "--capacity-path",
-        args.capacity_path,
+        str(capacity_path),
         "--forecast-path",
         str(forecast_path),
         "--candidate-top-k",
@@ -147,8 +155,8 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
 
 def ensure_inputs(args: argparse.Namespace, district: str) -> bool:
     """학습에 필요한 전처리/forecast 파일이 있는지 확인한다."""
-    processed_dir = Path(args.processed_dir)
-    forecast_path = Path(args.forecast_dir) / f"demand_forecast_1h_{district}.parquet"
+    processed_dir = project_path(args.processed_dir)
+    forecast_path = project_path(args.forecast_dir) / f"demand_forecast_1h_{district}.parquet"
     missing = []
     if not (processed_dir / "stations.parquet").exists():
         missing.append(str(processed_dir / "stations.parquet"))
