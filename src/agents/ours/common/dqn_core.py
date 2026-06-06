@@ -49,6 +49,96 @@ from src.envs.data_loader import load_episode
 from src.envs.rebalance_env import RebalanceEnv
 
 
+class TopKMaskableDQN(MaskableDQN):
+    """Top-K 후보 action에 맞게 next-state mask를 TD target에도 적용하는 DQN.
+
+    팀원 `MaskableDQN`은 현재 action을 고를 때 mask를 적용한다. 하지만 TD target의
+    `max_a Q(s', a)`에는 다음 state의 mask가 들어가지 않는다. Top-K wrapper에서는
+    state마다 유효한 rank 수가 달라질 수 있으므로, invalid rank가 target에 섞이지
+    않도록 우리 실험 코드 안에서만 보정한다.
+    """
+
+    def __init__(
+        self,
+        *args,
+        next_mask_top_k: int = 0,
+        candidate_feature_dim: int = 8,
+        masked_target_q: bool = True,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.next_mask_top_k = int(next_mask_top_k)
+        self.candidate_feature_dim = int(candidate_feature_dim)
+        self.masked_target_q = bool(masked_target_q)
+
+    def _next_action_mask_from_obs(self, next_observations: torch.Tensor) -> torch.Tensor | None:
+        """observation 뒤에 붙은 candidate feature에서 다음 state valid mask를 복원한다."""
+        if not self.masked_target_q or self.next_mask_top_k <= 0:
+            return None
+        tail_dim = self.next_mask_top_k * self.candidate_feature_dim
+        if next_observations.shape[1] < tail_dim:
+            return None
+        tail = next_observations[:, -tail_dim:]
+        features = tail.reshape(-1, self.next_mask_top_k, self.candidate_feature_dim)
+        # CandidateTopKActionWrapper의 feature 0번은 valid flag다.
+        mask = features[:, :, 0] > 0.5
+        if mask.shape[1] != self.action_space.n:
+            return None
+        # 안전장치: 혹시 전부 False면 rank 0만 허용한다.
+        empty = ~mask.any(dim=1)
+        if empty.any():
+            mask = mask.clone()
+            mask[empty, 0] = True
+        return mask
+
+    def train(self, gradient_steps: int, batch_size: int = 100) -> None:
+        """Double DQN target에 next-state Top-K mask를 적용해 Q update를 수행한다."""
+        if not self.masked_target_q or self.next_mask_top_k <= 0:
+            return super().train(gradient_steps, batch_size)
+
+        self.policy.set_training_mode(True)
+        self._update_learning_rate(self.policy.optimizer)
+
+        losses = []
+        for _ in range(gradient_steps):
+            replay_data = self.replay_buffer.sample(batch_size, env=self._vec_normalize_env)
+            discounts = replay_data.discounts if replay_data.discounts is not None else self.gamma
+            next_mask = self._next_action_mask_from_obs(replay_data.next_observations)
+
+            with torch.no_grad():
+                if self.double_q:
+                    # Double DQN: online net으로 다음 action을 고르되 invalid rank는 제외한다.
+                    next_q_online = self.q_net(replay_data.next_observations)
+                    if next_mask is not None:
+                        next_q_online = next_q_online.masked_fill(~next_mask, -1e9)
+                    next_actions = next_q_online.argmax(dim=1, keepdim=True)
+                    next_q_target = self.q_net_target(replay_data.next_observations)
+                    next_q_values = next_q_target.gather(1, next_actions)
+                else:
+                    next_q_target = self.q_net_target(replay_data.next_observations)
+                    if next_mask is not None:
+                        next_q_target = next_q_target.masked_fill(~next_mask, -1e9)
+                    next_q_values, _ = next_q_target.max(dim=1)
+                    next_q_values = next_q_values.reshape(-1, 1)
+
+                target_q_values = replay_data.rewards + (1 - replay_data.dones) * discounts * next_q_values
+
+            current_q_values = self.q_net(replay_data.observations)
+            current_q_values = torch.gather(current_q_values, dim=1, index=replay_data.actions.long())
+
+            loss = F.smooth_l1_loss(current_q_values, target_q_values)
+            losses.append(loss.item())
+
+            self.policy.optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+            self.policy.optimizer.step()
+
+        self._n_updates += gradient_steps
+        self.logger.record("train/n_updates", self._n_updates, exclude="tensorboard")
+        self.logger.record("train/loss", np.mean(losses))
+
+
 def date_range(start: str, end: str) -> list[str]:
     """시작일부터 종료일까지 날짜 문자열 목록을 만든다."""
     import datetime
@@ -259,6 +349,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-zone-count", type=int, default=3)
     parser.add_argument("--candidate-zone-penalty", type=float, default=0.0)
     parser.add_argument("--candidate-feature-mode", choices=["none", "basic"], default="none")
+    parser.add_argument("--masked-target-q", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--agent-shaping-mode", choices=["projected_imbalance"], default="projected_imbalance")
     parser.add_argument("--agent-shaping-scale", type=float, default=0.0)
     parser.add_argument("--agent-shaping-gamma", type=float, default=0.99)
@@ -304,6 +395,11 @@ def main() -> None:
     heuristic_mean, heuristic_rewards = evaluate_heuristic(eval_episodes, args.seed)
     print(f"=== DQN | tag={args.tag} ===")
     print(f"device={args.device}, obs_dim={obs_dim}, n_actions={n_actions}")
+    print(
+        "dqn target: "
+        f"double_q={args.double_q}, "
+        f"masked_target_q={args.masked_target_q and args.candidate_feature_mode == 'basic' and args.candidate_top_k > 0}"
+    )
     if capacity_stats:
         print(
             "capacity override: "
@@ -317,7 +413,7 @@ def main() -> None:
         )
     print(f"heuristic mean reward: {heuristic_mean:.2f}")
 
-    model = MaskableDQN(
+    model = TopKMaskableDQN(
         "MlpPolicy",
         train_env,
         learning_rate=args.learning_rate,
@@ -337,6 +433,8 @@ def main() -> None:
         verbose=0,
         device=args.device,
         double_q=args.double_q,
+        next_mask_top_k=args.candidate_top_k if args.candidate_feature_mode == "basic" else 0,
+        masked_target_q=args.masked_target_q,
     )
 
     history = []
