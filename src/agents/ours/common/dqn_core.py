@@ -85,10 +85,10 @@ ENV_KW = dict(
 )
 
 
-def load_episodes(dates: list[str], district: str) -> list:
+def load_episodes(dates: list[str], district: str, processed_dir: str = "data/processed") -> list:
     """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
     return [
-        load_episode("data/processed", district=district, episode_start=f"{date} 00:00")
+        load_episode(processed_dir, district=district, episode_start=f"{date} 00:00")
         for date in dates
     ]
 
@@ -204,6 +204,7 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="DQN forecast/capacity comparison agent")
     parser.add_argument("--district", default="마포구")
+    parser.add_argument("--processed-dir", default="data/processed")
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--total-timesteps", type=int, default=50_000)
     parser.add_argument("--eval-every", type=int, default=10_000)
@@ -263,8 +264,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """MaskableDQN을 생성하고 주기적 7일 평가로 best/final 모델을 저장한다."""
     args = parse_args()
-    train_episodes = load_episodes(TRAIN_DATES[: args.n_train_dates], args.district)
-    eval_episodes = load_episodes(EVAL_DATES, args.district)
+    train_episodes = load_episodes(TRAIN_DATES[: args.n_train_dates], args.district, args.processed_dir)
+    eval_episodes = load_episodes(EVAL_DATES, args.district, args.processed_dir)
     all_episodes = train_episodes + eval_episodes
 
     capacity_stats = apply_capacity_override(

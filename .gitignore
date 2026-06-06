@@ -27,6 +27,8 @@ data/processed/
 data/processed/*
 !data/processed/demand_forecast_1h_rlholdout_seed42.parquet
 !data/processed/station_capacity.csv
+data/processed_seoul_all/
+data/forecast_by_gu/
 
 # Logs / artifacts
 logs/

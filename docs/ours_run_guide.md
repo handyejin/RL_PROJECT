@@ -1,0 +1,202 @@
+# 우리 실험 코드 실행 가이드
+
+이 문서는 `src/agents/ours/` 아래에 추가한 실험 코드를 팀원이 재현하기 위한 실행 순서이다.
+
+핵심 목표는 다음 두 알고리즘을 수정 state에서 실행하는 것이다.
+
+| 알고리즘 | 설명 |
+|---|---|
+| REINFORCE | Reward-to-Go와 Value Network baseline을 사용하는 policy gradient |
+| A2C | Actor-Critic 구조, `r + gamma V(s') - V(s)` advantage 사용 |
+
+## 1. 실험에서 사용하는 데이터
+
+실험은 원본 따릉이 CSV를 바로 사용하지 않고, 먼저 parquet 형태로 전처리한 뒤 학습한다.
+
+| 데이터 | 기본 경로 | 설명 |
+|---|---|---|
+| 원본 대여/반납 CSV | `data/trips_2025_*.csv` | 2025년 월별 따릉이 이용 기록 |
+| 정류소 마스터 | `data/stations_master.csv` | 정류소 위치, 구 정보, 거치대 수 등 |
+| 전처리 결과 | `data/processed_seoul_all/` | 서울 전체 episode 생성을 위한 parquet |
+| 구별 1시간 수요예측 | `data/forecast_by_gu/` | 각 구별 `rent/return/net` 예측 feature |
+| 정류소 capacity | `data/processed/station_capacity.csv` | 정류소별 최대 거치 가능 수 |
+
+## 2. 전처리 실행
+
+서울 전체 데이터를 새로 만들 때는 다음 명령을 실행한다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python scripts/run_preprocess.py \
+  --gu all \
+  --out data/processed_seoul_all
+```
+
+완료 후 아래 파일들이 있어야 한다.
+
+```text
+data/processed_seoul_all/stations.parquet
+data/processed_seoul_all/trips.parquet
+data/processed_seoul_all/demand_10min.parquet
+data/processed_seoul_all/weather_10min.parquet
+```
+
+## 3. 수요예측 파일 생성
+
+각 구별 학습에는 1시간 수요예측 parquet이 필요하다.
+
+예를 들어 영등포구만 만들려면:
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python scripts/train_demand_forecast.py \
+  --processed-dir data/processed_seoul_all \
+  --district 영등포구 \
+  --max-train-rows 500000 \
+  --max-eval-rows 200000 \
+  --max-iter 140 \
+  --model-out data/forecast_by_gu/demand_forecast_1h_영등포구.joblib \
+  --forecast-out data/forecast_by_gu/demand_forecast_1h_영등포구.parquet \
+  --metrics-out data/forecast_by_gu/demand_forecast_1h_영등포구_metrics.json
+```
+
+25개 구 전체 forecast와 A2C 결과를 한 번에 만들려면 아래 runner를 사용할 수 있다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_gu_a2c_full \
+  --episodes 500 \
+  --eval-every 50 \
+  --n-train-dates 200 \
+  --run-tag gu_a2c_topk_no_bc_2026-06-06 \
+  --device cpu
+```
+
+## 4. 쉽게 실행하는 방법
+
+터미널 선택형 wrapper를 추가했다.
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+```
+
+실행하면 다음을 고른다.
+
+```text
+1. REINFORCE
+2. A2C
+
+1. ALL
+2. 영등포구
+3. 마포구
+4. 관악구
+5. 직접 입력
+```
+
+명령형으로 바로 실행할 수도 있다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+  --algorithm a2c \
+  --district 영등포구 \
+  --episodes 500 \
+  --eval-every 50 \
+  --progress
+```
+
+REINFORCE는 다음처럼 실행한다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+  --algorithm reinforce \
+  --district 영등포구 \
+  --episodes 500 \
+  --eval-every 50 \
+  --progress
+```
+
+25개 구 전체를 순차 실행하려면:
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+  --algorithm a2c \
+  --district ALL \
+  --episodes 500 \
+  --eval-every 50 \
+  --progress
+```
+
+## 5. 진행률 확인
+
+`--progress` 옵션을 사용하면 `tqdm`으로 episode 진행률을 볼 수 있다.
+
+표시되는 값은 다음과 같다.
+
+| 표시값 | 의미 |
+|---|---|
+| `eval` | 현재 checkpoint의 7일 평균 평가 reward |
+| `base` | 같은 구의 MostImbalanced baseline reward |
+| `delta` | `eval - base`, 0보다 크면 baseline보다 좋음 |
+| `best` | 지금까지 가장 좋은 baseline 대비 delta |
+
+예:
+
+```text
+A2C 영등포구: 50/500 [eval=-2390.2, base=-2440.1, delta=+49.9, best=+49.9]
+```
+
+## 6. Baseline 해석
+
+Reward는 구마다 scale이 다르다.
+
+따라서 raw reward만 비교하지 않고, 같은 구의 `MostImbalanced` baseline과 비교한다.
+
+```text
+Delta = Model Reward - MostImbalanced Baseline Reward
+```
+
+| Delta | 의미 |
+|---:|---|
+| `> 0` | 모델이 baseline보다 좋음 |
+| `= 0` | baseline과 비슷함 |
+| `< 0` | 모델이 baseline보다 나쁨 |
+
+## 7. 결과 파일
+
+학습 결과는 `logs/` 아래에 저장된다.
+
+```text
+logs/a2c_{tag}/history.npy
+logs/a2c_{tag}/best/best_model.pt
+logs/a2c_{tag}/actor_critic_final.pt
+
+logs/reinforce_{tag}/history.npy
+logs/reinforce_{tag}/best/best_model.pt
+logs/reinforce_{tag}/reinforce_final.pt
+```
+
+`logs/`와 모델 파일은 git에 올리지 않는다.
+
+25개 구 batch runner 결과 요약은 `docs/` 아래에 저장된다.
+
+```text
+docs/gu_a2c_topk_no_bc_2026-06-06_summary.csv
+docs/gu_a2c_topk_no_bc_2026-06-06_summary.md
+```
+
+## 8. 빠른 테스트
+
+PR 전 간단히 실행만 확인하려면 episode를 작게 줄인다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+  --algorithm a2c \
+  --district 영등포구 \
+  --episodes 2 \
+  --eval-every 1 \
+  --progress
+```
+
+## 9. 주의사항
+
+- `data/processed_seoul_all/`와 `data/forecast_by_gu/`는 용량이 커서 git에 올리지 않는다.
+- 수요예측 파일이 없으면 `run_interactive.py`가 어떤 파일이 없는지 알려준다.
+- 평가 reward는 7일 평가셋 기준이다.
+- `Best Ep`는 `eval-every` 간격으로 평가한 checkpoint 중 최고 시점이다.

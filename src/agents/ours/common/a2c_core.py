@@ -47,6 +47,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm.auto import tqdm
 
 from src.agents.baselines import get_policy
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
@@ -205,10 +206,10 @@ def make_env(ep, args: argparse.Namespace, seed: int | None = None, for_eval: bo
     return maybe_wrap_candidate_actions(env, args)
 
 
-def load_episodes(dates: list[str], district: str) -> list:
+def load_episodes(dates: list[str], district: str, processed_dir: str = "data/processed") -> list:
     """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
     return [
-        load_episode("data/processed", district=district, episode_start=f"{date} 00:00")
+        load_episode(processed_dir, district=district, episode_start=f"{date} 00:00")
         for date in dates
     ]
 
@@ -564,9 +565,11 @@ def parse_args() -> argparse.Namespace:
     """
     parser = argparse.ArgumentParser(description="A2C actor-critic agent")
     parser.add_argument("--district", default="마포구")
+    parser.add_argument("--processed-dir", default="data/processed")
     parser.add_argument("--episodes", type=int, default=200)
     parser.add_argument("--n-train-dates", type=int, default=60)
     parser.add_argument("--eval-every", type=int, default=20)
+    parser.add_argument("--progress", action="store_true")
     parser.add_argument("--tag", default="run1")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--hidden", type=int, default=256)
@@ -637,9 +640,9 @@ def main() -> None:
     val_start = args.n_train_dates
     val_end = args.n_train_dates + args.bc_val_dates
     val_dates = TRAIN_DATES[val_start:val_end]
-    train_episodes = load_episodes(train_dates, args.district)
-    bc_val_episodes = load_episodes(val_dates, args.district) if args.bc_val_dates > 0 else []
-    eval_episodes = load_episodes(EVAL_DATES, args.district)
+    train_episodes = load_episodes(train_dates, args.district, args.processed_dir)
+    bc_val_episodes = load_episodes(val_dates, args.district, args.processed_dir) if args.bc_val_dates > 0 else []
+    eval_episodes = load_episodes(EVAL_DATES, args.district, args.processed_dir)
     all_episodes = train_episodes + bc_val_episodes + eval_episodes
     capacity_stats = apply_capacity_override(
         all_episodes,
@@ -740,7 +743,18 @@ def main() -> None:
         print_eval_table("a2c_bc_only", heuristic_rewards, final_rewards)
         return
 
-    for episode in range(1, args.episodes + 1):
+    episode_iter = range(1, args.episodes + 1)
+    progress_bar = None
+    if args.progress:
+        progress_bar = tqdm(
+            episode_iter,
+            total=args.episodes,
+            desc=f"A2C {args.district}",
+            unit="episode",
+        )
+        episode_iter = progress_bar
+
+    for episode in episode_iter:
         ep = train_episodes[int(rng.integers(len(train_episodes)))]
         env = make_env(ep, args, seed=args.seed + episode)
         stats = train_episode(
@@ -786,6 +800,15 @@ def main() -> None:
                     value.load_state_dict(best_state["value"])
                 if args.finetune_patience > 0:
                     patience_left -= 1
+            if progress_bar is not None:
+                progress_bar.set_postfix(
+                    {
+                        "eval": f"{eval_reward:.1f}",
+                        "base": f"{heuristic_mean:.1f}",
+                        "delta": f"{eval_reward - heuristic_mean:+.1f}",
+                        "best": f"{best_reward - heuristic_mean:+.1f}",
+                    }
+                )
             print(
                 f"episode={episode:4d} eval={eval_reward:8.2f} "
                 f"train={stats.reward:8.2f} actor_loss={stats.actor_loss:7.3f} "
