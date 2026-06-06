@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Ours RL Replay Viewer</title>
+  <title>Replay Viewer</title>
   <style>
     :root {
       --bg: #f6f7fb;
@@ -32,6 +32,42 @@
       margin: 0 0 6px;
       font-size: 22px;
       letter-spacing: 0;
+    }
+    .header-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .badges {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #f8fafc;
+      color: #344054;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .badge.strong {
+      color: #ffffff;
+      background: var(--blue);
+      border-color: var(--blue);
+    }
+    .algo-note {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+      max-width: 620px;
     }
     .sub {
       color: var(--muted);
@@ -167,10 +203,18 @@
 </head>
 <body>
   <header>
-    <h1>Ours RL Replay Viewer</h1>
-    <div class="sub">
-      REINFORCE/A2C 모델이 실제 episode에서 어떤 정류소를 선택하고, 트럭이 어떻게 이동하는지 확인하는 별도 viewer입니다.
-      기존 팀원 DQN viewer는 수정하지 않았습니다.
+    <div class="header-row">
+      <div>
+        <h1>Replay Viewer</h1>
+        <div id="header-meta" class="badges">
+          <span class="badge strong">JSON 대기 중</span>
+        </div>
+      </div>
+      <div class="algo-note">
+        <strong>지원 알고리즘</strong>:
+        REINFORCE, A2C, PPO, DQN replay JSON을 같은 형식으로 확인할 수 있습니다.
+        현재 화면은 선택한 JSON의 metadata를 기준으로 구/날짜/알고리즘을 표시합니다.
+      </div>
     </div>
   </header>
 
@@ -184,6 +228,7 @@
         <button id="next">▶</button>
         <input id="slider" type="range" min="0" max="0" value="0" />
         <span id="step-label" class="sub">0 / 0</span>
+        <span id="file-label" class="sub">파일 미선택</span>
       </div>
       <svg id="map" role="img" aria-label="따릉이 재배치 replay map"></svg>
     </section>
@@ -322,8 +367,22 @@
       updateSidePanel(snap, meta);
     }
 
+    function updateHeader(meta) {
+      const algo = String(meta.algo || "-").toUpperCase();
+      const state = meta.state || "original";
+      const topK = meta.candidate_top_k ? `Top-K ${meta.candidate_top_k}` : "전체 action";
+      $("header-meta").innerHTML = `
+        <span class="badge strong">${meta.district || "-"}</span>
+        <span class="badge">${meta.date || "-"}</span>
+        <span class="badge">${algo}</span>
+        <span class="badge">${state}</span>
+        <span class="badge">${topK}</span>
+      `;
+    }
+
     function updateSidePanel(snap, meta) {
-      $("meta").textContent = `${meta.district} · ${meta.date} · ${meta.algo} · ${meta.state} · Top-K ${meta.candidate_top_k}`;
+      updateHeader(meta);
+      $("meta").textContent = `${meta.district} · ${meta.date} · ${String(meta.algo || "-").toUpperCase()} · ${meta.state} · Top-K ${meta.candidate_top_k}`;
       $("m-reward").textContent = fmt(snap.cum_reward);
       $("m-step").textContent = `${snap.rl_step} / ${meta.rl_steps}`;
       $("m-stockout").textContent = String(snap.cum_stockout);
@@ -339,24 +398,25 @@
       $("candidates").innerHTML = rows || `<tr><td colspan="3">후보 정보 없음</td></tr>`;
     }
 
-    function loadReplay(obj) {
+    function loadReplay(obj, fileName = "샘플 JSON") {
       replay = obj;
       index = 0;
       project = null;
       $("slider").max = String(replay.snapshots.length - 1);
+      $("file-label").textContent = fileName;
       draw();
     }
 
     async function loadDefault() {
       const response = await fetch(DEFAULT_JSON);
       if (!response.ok) throw new Error(`${DEFAULT_JSON} 파일을 찾을 수 없습니다.`);
-      loadReplay(await response.json());
+      loadReplay(await response.json(), DEFAULT_JSON);
     }
 
     $("file-input").addEventListener("change", async (event) => {
       const file = event.target.files[0];
       if (!file) return;
-      loadReplay(JSON.parse(await file.text()));
+      loadReplay(JSON.parse(await file.text()), file.name);
     });
     $("load-default").addEventListener("click", () => loadDefault().catch((err) => alert(err.message)));
     $("slider").addEventListener("input", (event) => { index = Number(event.target.value); draw(); });
