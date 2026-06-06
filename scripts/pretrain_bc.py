@@ -32,12 +32,13 @@ from src.envs.rebalance_env import RebalanceEnv  # noqa: E402
 from scripts.train import TRAIN_DATES, _load_yaml, _get  # noqa: E402
 
 
-def collect_data(args, env_kwargs: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """휴리스틱을 train episode에서 시뮬레이션 → (obs, action, t) 쌍 수집.
+def collect_data(args, env_kwargs: dict, policy) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """주어진 정책을 train episode에서 시뮬레이션 → (obs, action, t) 쌍 수집.
 
     t는 결정 시점의 환경 시계(env.t, 0~143). 오전 피크 가중 샘플링에 사용.
+    obs는 env_kwargs(future_demand_horizon 포함)대로 구성됨 — 예측형 clone 시
+    학생이 미래 수요 정보를 받도록 future_demand_horizon>0로 수집해야 한다.
     """
-    policy = get_policy("most_imbalanced")
     dates = TRAIN_DATES[: args.n_dates]
     print(f"\n[1/3] collecting heuristic actions on {len(dates)} dates...")
 
@@ -167,6 +168,14 @@ def main() -> None:
                         help="2차(저녁) 피크 가중 끝 env.t (포함). 0이면 비활성")
     parser.add_argument("--peak2-weight", type=float, default=1.0,
                         help="2차(저녁) 피크 oversample 배수 (1.0=비활성)")
+    parser.add_argument("--policy", default="most_imbalanced",
+                        choices=["most_imbalanced", "predictive_imbalanced"],
+                        help="clone 대상 정책 (predictive_imbalanced면 미래 예측형)")
+    parser.add_argument("--horizon", type=int, default=3,
+                        help="predictive_imbalanced의 선행 horizon (스텝)")
+    parser.add_argument("--future-demand-horizon", type=int,
+                        default=_get(cfg, "env", "future_demand_horizon", default=0),
+                        help="obs에 향후 N스텝 net 수요 포함 (예측형 clone 시 학생도 lookahead 받게 >0)")
     parser.add_argument("--tag", default="bc_pretrain")
     parser.add_argument("--dataset", default=None,
                         help="이미 수집된 bc_dataset.npz 경로 (재수집 생략, obs/actions/times 로드)")
@@ -183,10 +192,19 @@ def main() -> None:
         w_travel_step=_get(cfg, "reward", "travel_step", default=-0.002),
         w_work_per_bike=_get(cfg, "env", "w_work_per_bike", default=0.0),
         w_idle_visit=_get(cfg, "env", "w_idle_visit", default=0.0),
-        future_demand_horizon=_get(cfg, "env", "future_demand_horizon", default=0),
+        future_demand_horizon=args.future_demand_horizon,
         # bonus·shaping은 휴리스틱 결정에 영향 없음 (정책은 reward 안 봄)
         use_action_mask=True,
     )
+
+    # clone 대상 정책 (예측형은 horizon 필요)
+    from src.agents.baselines import PredictiveImbalancedPolicy
+    if args.policy == "predictive_imbalanced":
+        clone_policy = PredictiveImbalancedPolicy(horizon=args.horizon)
+        print(f"  clone 대상: predictive_imbalanced (H={args.horizon}), "
+              f"future_demand_horizon={args.future_demand_horizon}")
+    else:
+        clone_policy = get_policy(args.policy)
     net_arch = list(_get(cfg, "dqn", "net_arch", default=[256, 256]))
 
     out_dir = PROJECT_ROOT / "logs" / f"bc_{args.tag}"
@@ -198,7 +216,7 @@ def main() -> None:
         obs, actions, times = z["obs"], z["actions"], z["times"]
         print(f"  loaded {len(obs)} (obs, action) pairs")
     else:
-        obs, actions, times = collect_data(args, env_kwargs)
+        obs, actions, times = collect_data(args, env_kwargs, clone_policy)
         np.savez(out_dir / "bc_dataset.npz", obs=obs, actions=actions, times=times)
         print(f"  saved dataset → {out_dir/'bc_dataset.npz'}")
 

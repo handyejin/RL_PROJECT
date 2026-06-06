@@ -142,6 +142,28 @@
       <div style="margin-left: auto; display: flex; gap: 8px; align-items: center;">
         <select id="quick-select" style="background: var(--panel-2); color: var(--text); border: 1px solid var(--border); padding: 6px 8px; border-radius: 6px; font-family: inherit; font-size: 12px;">
           <option value="">━ 빠른 전환 (eval set 7일) ━</option>
+          <optgroup label="🚲 소규모 10정류소 DQN — 휴리스틱 추월 (평가일0) ⭐">
+            <option value="replay_small_dqn.json">DQN (학습) — reward -106.6, stockout 64, full 51 ✅</option>
+            <option value="replay_small_sla.json">SLA (예측형 규칙) — reward -159.5, stockout 73, full 105</option>
+          </optgroup>
+          <optgroup label="QR-DQN 순수 1M (안정화: reward-scale+grad-clip, det. best -602.8) 🆕">
+            <option value="replay_qrdqn_stable_2025-03-25.json">2025-03-25 (봄 화, reward -646.3)</option>
+            <option value="replay_qrdqn_stable_2025-04-18.json">2025-04-18 (봄 금, reward -784.8)</option>
+            <option value="replay_qrdqn_stable_2025-05-17.json">2025-05-17 (봄 토, reward -366.9)</option>
+            <option value="replay_qrdqn_stable_2025-07-01.json">2025-07-01 (여름 화, reward -466.3)</option>
+            <option value="replay_qrdqn_stable_2025-07-06.json">2025-07-06 (여름 일, reward -266.7) ⭐</option>
+            <option value="replay_qrdqn_stable_2025-07-09.json">2025-07-09 (여름 수, reward -744.0)</option>
+            <option value="replay_qrdqn_stable_2025-08-21.json">2025-08-21 (여름 목, reward -944.7)</option>
+          </optgroup>
+          <optgroup label="휴리스틱 most_imbalanced (비교 기준, det. 평균 -500.0) 📐">
+            <option value="replay_heuristic_2025-03-25.json">2025-03-25 (봄 화, reward -574.2)</option>
+            <option value="replay_heuristic_2025-04-18.json">2025-04-18 (봄 금, reward -682.3)</option>
+            <option value="replay_heuristic_2025-05-17.json">2025-05-17 (봄 토, reward -280.3)</option>
+            <option value="replay_heuristic_2025-07-01.json">2025-07-01 (여름 화, reward -377.2)</option>
+            <option value="replay_heuristic_2025-07-06.json">2025-07-06 (여름 일, reward -242.6) ⭐</option>
+            <option value="replay_heuristic_2025-07-09.json">2025-07-09 (여름 수, reward -592.8)</option>
+            <option value="replay_heuristic_2025-08-21.json">2025-08-21 (여름 목, reward -750.7)</option>
+          </optgroup>
           <optgroup label="Vanilla DQN 500k (best -657.6)">
             <option value="replay_2025-03-25.json">2025-03-25 (봄 화, reward -935.9)</option>
             <option value="replay_2025-04-18.json">2025-04-18 (봄 금, reward -1104.5)</option>

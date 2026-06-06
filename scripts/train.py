@@ -23,12 +23,17 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import gymnasium as gym  # noqa: E402
 from stable_baselines3 import DQN  # noqa: E402
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback  # noqa: E402
 from stable_baselines3.common.monitor import Monitor  # noqa: E402
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv  # noqa: E402
 
 from src.agents.baselines import get_policy  # noqa: E402
 from src.agents.masked_dqn import MaskableDQN  # noqa: E402
+from src.agents.masked_qrdqn import MaskableQRDQN  # noqa: E402
+from src.agents.dqfd import DQfDDQN, DemoBuffer, collect_demo_transitions  # noqa: E402
+from src.envs.abstract_action import AbstractActionWrapper  # noqa: E402
 from src.envs.data_loader import load_episode  # noqa: E402
 from src.envs.rebalance_env import RebalanceEnv  # noqa: E402
 
@@ -124,15 +129,19 @@ class MaskedEvalCallback(BaseCallback):
 
         rewards = []
         env = self.eval_env
-        base = env.env if hasattr(env, "env") else env  # Monitor → underlying env
-        n_eps = min(self.n_eval_episodes, len(base._episodes))
+        # _episodes는 RebalanceEnv 본체까지 내려가서 찾고,
+        # action_masks/reset/step은 최외곽 env(추상화 wrapper 포함)에서 호출
+        raw = env
+        while not hasattr(raw, "_episodes") and hasattr(raw, "env"):
+            raw = raw.env
+        n_eps = min(self.n_eval_episodes, len(raw._episodes))
         for ep_idx in range(n_eps):
             # episode를 명시 선택 (deterministic 평가) + 고정 seed
             obs, _ = env.reset(seed=42, options={"episode_idx": ep_idx})
             done = False
             total = 0.0
             while not done:
-                mask = base.action_masks()
+                mask = env.action_masks()
                 action, _ = self.model.predict(obs, deterministic=True, action_masks=mask)
                 obs, r, done, trunc, _ = env.step(int(action))
                 total += r
@@ -227,6 +236,11 @@ def build_env(
     w_work_per_bike: float = 0.0,
     w_idle_visit: float = 0.0,
     future_demand_horizon: int = 0,
+    reward_scale: float = 1.0,
+    abstract_actions: bool = False,
+    forecast_rent=None,
+    forecast_ret=None,
+    pred_horizon: int = 3,
 ):
     env = RebalanceEnv(
         episodes, n_trucks=n_trucks, truck_capacity=truck_capacity,
@@ -243,11 +257,76 @@ def build_env(
         w_travel_step=w_travel_step,
         explore_bonus_scale=explore_bonus_scale,
         shaping_scale=shaping_scale,
+        forecast_rent=forecast_rent,
+        forecast_ret=forecast_ret,
     )
+    if abstract_actions:
+        env = AbstractActionWrapper(env, pred_horizon=pred_horizon,
+                                    forecast_rent=forecast_rent, forecast_ret=forecast_ret)
+    if reward_scale != 1.0:
+        env = RewardScale(env, reward_scale)
     if monitor_dir is not None:
         monitor_dir.mkdir(parents=True, exist_ok=True)
         env = Monitor(env, filename=str(monitor_dir / "monitor"))
     return env
+
+
+class RewardScale(gym.RewardWrapper):
+    """보상에 상수 곱 (TD 타깃 크기 축소 → 발산 완화).
+
+    선형 스케일이라 argmax 정책의 순서는 불변 — 학습 안정화 목적.
+    평가 환경엔 적용하지 않아 휴리스틱과 raw reward로 공정 비교한다.
+    action_masks()를 RebalanceEnv까지 위임해 마스킹 에이전트와 호환.
+    """
+
+    def __init__(self, env, scale: float):
+        super().__init__(env)
+        self.scale = float(scale)
+
+    def reward(self, r):
+        return r * self.scale
+
+    def action_masks(self):
+        return self.env.action_masks()
+
+
+def _make_env_thunk(episodes, rank: int, *, n_trucks, truck_capacity,
+                    target_fill_ratio, seed, use_action_mask, reward_scale,
+                    abstract_actions, env_kwargs):
+    """SubprocVecEnv용 env 생성 함수 (rank별 seed 오프셋으로 episode 회전 다양화)."""
+    def _init():
+        env = build_env(
+            episodes, n_trucks, truck_capacity=truck_capacity,
+            target_fill_ratio=target_fill_ratio,
+            seed=(None if seed is None else seed + rank),
+            monitor_dir=None, use_action_mask=use_action_mask,
+            reward_scale=reward_scale, abstract_actions=abstract_actions, **env_kwargs,
+        )
+        return Monitor(env)
+    return _init
+
+
+def build_train_env(episodes, n_envs: int, *, n_trucks, truck_capacity,
+                    target_fill_ratio, seed, monitor_dir, use_action_mask,
+                    reward_scale, abstract_actions, env_kwargs):
+    """학습용 환경. n_envs==1이면 단일 env, >1이면 SubprocVecEnv 병렬."""
+    if n_envs <= 1:
+        return build_env(
+            episodes, n_trucks, truck_capacity=truck_capacity,
+            target_fill_ratio=target_fill_ratio, seed=seed,
+            monitor_dir=monitor_dir, use_action_mask=use_action_mask,
+            reward_scale=reward_scale, abstract_actions=abstract_actions, **env_kwargs,
+        )
+    thunks = [
+        _make_env_thunk(
+            episodes, i, n_trucks=n_trucks, truck_capacity=truck_capacity,
+            target_fill_ratio=target_fill_ratio, seed=seed,
+            use_action_mask=use_action_mask, reward_scale=reward_scale,
+            abstract_actions=abstract_actions, env_kwargs=env_kwargs,
+        )
+        for i in range(n_envs)
+    ]
+    return SubprocVecEnv(thunks)
 
 
 def _load_yaml(path: str | Path) -> dict:
@@ -258,6 +337,35 @@ def _load_yaml(path: str | Path) -> dict:
     import yaml
     with open(p, encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def _resolve_device(requested: str) -> str:
+    """요청한 device를 실제 사용 가능한 것으로 해석.
+
+    - auto: mps > cuda > cpu 순으로 가능한 것 선택
+    - mps/cuda 명시했는데 불가하면 이유 출력 후 cpu fallback
+    """
+    import torch
+    mps_ok = torch.backends.mps.is_available()
+    cuda_ok = torch.cuda.is_available()
+
+    req = (requested or "auto").lower()
+    if req == "auto":
+        dev = "mps" if mps_ok else ("cuda" if cuda_ok else "cpu")
+    elif req == "mps" and not mps_ok:
+        reason = "빌드 안됨" if not torch.backends.mps.is_built() else "macOS 14.0+ 필요 또는 Apple Silicon 아님"
+        print(f"  ⚠️  device=mps 요청했으나 사용 불가 ({reason}) → cpu fallback")
+        dev = "cpu"
+    elif req == "cuda" and not cuda_ok:
+        print(f"  ⚠️  device=cuda 요청했으나 CUDA 없음 → cpu fallback")
+        dev = "cpu"
+    else:
+        dev = req
+
+    # MLP 정책 + CPU-bound env에서는 MPS가 오히려 느릴 수 있음 (SB3 권고)
+    if dev == "mps":
+        print("  ℹ️  MPS 사용 — 작은 MLP에선 CPU보다 느릴 수 있으니 step/s 비교 권장")
+    return dev
 
 
 def _get(cfg: dict, *keys, default=None):
@@ -286,12 +394,20 @@ def main() -> None:
 
     # ── Phase 2: 본 parser — default를 yaml에서 (CLI 인자로 override 가능) ──
     parser = argparse.ArgumentParser(parents=[pre])
-    parser.add_argument("--algo", choices=["dqn", "masked_dqn"],
+    parser.add_argument("--algo", choices=["dqn", "masked_dqn", "qrdqn", "dqfd"],
                         default=_get(cfg, "algorithm", "name", default="dqn"),
-                        help="dqn: vanilla, masked_dqn: invalid-action masking (action_masks)")
+                        help="dqn: vanilla, masked_dqn: invalid-action masking, "
+                             "qrdqn: distributional(QR-DQN) + masking, "
+                             "dqfd: demo(휴리스틱) anchor + large-margin (forgetting 방지)")
     parser.add_argument("--double-q", action="store_true",
                         default=_get(cfg, "algorithm", "double_q", default=False),
                         help="masked_dqn에서 Double DQN 타깃 사용")
+    parser.add_argument("--n-steps", type=int,
+                        default=_get(cfg, "dqn", "n_steps", default=1),
+                        help="qrdqn n-step returns (장기 credit assignment). 1=일반 1-step TD")
+    parser.add_argument("--n-quantiles", type=int,
+                        default=_get(cfg, "dqn", "n_quantiles", default=200),
+                        help="qrdqn 분위수 개수 (분포 해상도)")
     parser.add_argument("--no-action-mask", action="store_true",
                         help="env의 use_action_mask=False (마스킹 효과 비교용)")
     parser.add_argument("--district", default=_get(cfg, "district", default="마포구"))
@@ -322,11 +438,61 @@ def main() -> None:
                         default=_get(cfg, "dqn", "exploration_fraction", default=0.3))
     parser.add_argument("--exploration-final-eps", type=float,
                         default=_get(cfg, "dqn", "exploration_final_eps", default=0.05))
+    parser.add_argument("--exploration-initial-eps", type=float,
+                        default=_get(cfg, "dqn", "exploration_initial_eps", default=1.0),
+                        help="ε 시작값 (기본 1.0). 강한 prior fine-tune 시 낮게(예 0.05) — 무작위 탐색이 prior 오염 방지")
     parser.add_argument("--learning-starts", type=int,
                         default=_get(cfg, "dqn", "learning_starts", default=1000),
                         help="첫 N step은 ε=1.0 random — replay buffer 다양화")
     parser.add_argument("--seed", type=int,
                         default=_get(cfg, "training", "seed", default=42))
+    parser.add_argument("--device", default=_get(cfg, "training", "device", default="auto"),
+                        help="학습 디바이스: auto(가능하면 mps>cuda>cpu) / cpu / mps / cuda")
+    parser.add_argument("--n-envs", type=int,
+                        default=_get(cfg, "training", "n_envs", default=1),
+                        help="병렬 환경 수 (>1이면 SubprocVecEnv로 rollout 병렬 수집 → 속도↑)")
+    parser.add_argument("--reward-scale", type=float,
+                        default=_get(cfg, "dqn", "reward_scale", default=1.0),
+                        help="학습 보상 상수 곱 (예 0.01). TD 타깃 축소 → 발산 완화. 평가엔 미적용")
+    parser.add_argument("--max-grad-norm", type=float,
+                        default=_get(cfg, "dqn", "max_grad_norm", default=10.0),
+                        help="그래디언트 클리핑 norm (발산 방지). QRDQN 기본 None이라 명시 권장")
+    parser.add_argument("--abstract-actions", action="store_true",
+                        default=_get(cfg, "env", "abstract_actions", default=False),
+                        help="146지선다(정류소) → 6개 의도(…/predictive)로 축소")
+    parser.add_argument("--predictive-mode", choices=["oracle", "forecast"], default="forecast",
+                        help="추상 predictive 의도의 미래 수요 출처: forecast(train 평균·배포형) / oracle(실제미래·상한)")
+    parser.add_argument("--pred-horizon", type=int, default=3,
+                        help="predictive 의도 선행 스텝 (3=30분)")
+    # ── DQfD 전용 (--algo dqfd) ──
+    parser.add_argument("--margin", type=float,
+                        default=_get(cfg, "dqfd", "margin", default=0.8),
+                        help="dqfd large-margin loss의 마진 ℓ (demo 행동 Q를 이만큼 1등으로 강제)")
+    parser.add_argument("--lambda-margin", type=float,
+                        default=_get(cfg, "dqfd", "lambda_margin", default=1.0),
+                        help="dqfd margin loss 가중치 λ_E")
+    parser.add_argument("--lambda-l2", type=float,
+                        default=_get(cfg, "dqfd", "lambda_l2", default=1e-5),
+                        help="dqfd L2 정규화 가중치")
+    parser.add_argument("--lambda-bc", type=float,
+                        default=_get(cfg, "dqfd", "lambda_bc", default=1.0),
+                        help="dqfd BC(CrossEntropy) 모방 가중치 — margin보다 강한 모방 신호 (0이면 순수 DQfD)")
+    parser.add_argument("--lambda-margin-final", type=float,
+                        default=_get(cfg, "dqfd", "lambda_margin_final", default=None),
+                        help="dqfd 앵커 annealing: λ_margin을 학습 끝까지 이 값으로 선형 감쇠 (미지정=상수)")
+    parser.add_argument("--lambda-bc-final", type=float,
+                        default=_get(cfg, "dqfd", "lambda_bc_final", default=None),
+                        help="dqfd 앵커 annealing: λ_bc를 학습 끝까지 이 값으로 선형 감쇠 (미지정=상수). "
+                             "전반 forgetting 차단 → 후반 RL이 휴리스틱 위로 개선")
+    parser.add_argument("--dqfd-pretrain-steps", type=int,
+                        default=_get(cfg, "dqfd", "pretrain_steps", default=20000),
+                        help="dqfd: 환경 상호작용 전 demo만으로 Q 보정할 gradient step 수")
+    parser.add_argument("--dqfd-pretrain-lr", type=float,
+                        default=_get(cfg, "dqfd", "pretrain_lr", default=1e-3),
+                        help="dqfd pretrain 전용 lr (supervised라 본 RL lr보다 높게 — BC와 동일 1e-3)")
+    parser.add_argument("--demo-batch-size", type=int,
+                        default=_get(cfg, "dqfd", "demo_batch_size", default=0),
+                        help="dqfd 본학습 시 demo 미니배치 크기 (0이면 batch_size와 동일)")
     parser.add_argument("--tag", default=_get(cfg, "training", "tag", default="run1"),
                         help="로그 디렉토리 구분")
     parser.add_argument("--n-train-dates", type=int,
@@ -447,17 +613,44 @@ def main() -> None:
           f"shaping_scale={eval_env_kwargs['shaping_scale']} "
           f"({'shaping OFF — 공정 metric' if not args.eval_shaping else 'shaping ON'})")
 
-    train_env = build_env(
-        train_episodes, args.n_trucks, truck_capacity=args.truck_capacity,
-        target_fill_ratio=args.target_fill_ratio,
-        seed=args.seed,
-        monitor_dir=log_root / "monitor", use_action_mask=use_mask,
-        **train_env_kwargs,
+    # 미래수요 출처 설정. forecast면 train 평균 프로파일을 obs(future_demand) + 추상 predictive에 주입.
+    # forecast_gr/ge는 데모(forecast 예측형) 수집에도 재사용.
+    forecast_gr = forecast_ge = None
+    if args.abstract_actions:
+        for d in (train_env_kwargs, eval_env_kwargs):
+            d["pred_horizon"] = args.pred_horizon
+    _need_forecast = args.predictive_mode == "forecast" and (
+        args.abstract_actions or args.future_demand_horizon > 0)
+    if _need_forecast:
+        forecast_gr = np.stack([ep.rentals for ep in train_episodes]).mean(0).astype(np.float32)
+        forecast_ge = np.stack([ep.returns for ep in train_episodes]).mean(0).astype(np.float32)
+        for d in (train_env_kwargs, eval_env_kwargs):
+            d["forecast_rent"] = forecast_gr
+            d["forecast_ret"] = forecast_ge
+        print(f"  forecast 주입: train {len(train_episodes)}일 평균 "
+              f"(obs future_demand + predictive에 사용, H={args.pred_horizon})")
+    elif args.abstract_actions:
+        print(f"  predictive 의도 = oracle (실제 미래, H={args.pred_horizon}) — 상한")
+
+    if args.reward_scale != 1.0:
+        print(f"  reward_scale = {args.reward_scale} (학습만 적용, 평가는 raw)")
+    if args.n_envs > 1:
+        print(f"  n_envs = {args.n_envs} (SubprocVecEnv 병렬 rollout)")
+    if args.abstract_actions:
+        print(f"  abstract_actions = ON (146 → 5 의도)")
+    train_env = build_train_env(
+        train_episodes, args.n_envs, n_trucks=args.n_trucks,
+        truck_capacity=args.truck_capacity, target_fill_ratio=args.target_fill_ratio,
+        seed=args.seed, monitor_dir=(log_root / "monitor" if args.n_envs <= 1 else None),
+        use_action_mask=use_mask, reward_scale=args.reward_scale,
+        abstract_actions=args.abstract_actions, env_kwargs=train_env_kwargs,
     )
+    # 평가 환경: reward_scale 미적용 (raw) → 휴리스틱과 공정 비교
     eval_env = build_env(
         eval_episodes, args.n_trucks, truck_capacity=args.truck_capacity,
         target_fill_ratio=args.target_fill_ratio,
         seed=args.seed + 1, use_action_mask=use_mask,
+        abstract_actions=args.abstract_actions,
         **eval_env_kwargs,
     )
 
@@ -470,17 +663,22 @@ def main() -> None:
         print(f"  lr_decay ON: {lr_base:.1e} → {lr_base*0.1:.1e} (linear, clamp 0.1)")
     else:
         lr_schedule = args.lr
+    device = _resolve_device(args.device)
+    print(f"  device = {device}")
     common_kwargs = dict(
+        device=device,
         learning_rate=lr_schedule,
         buffer_size=args.buffer_size,
         batch_size=args.batch_size,
         gamma=args.gamma,
         exploration_fraction=args.exploration_fraction,
         exploration_final_eps=args.exploration_final_eps,
+        exploration_initial_eps=args.exploration_initial_eps,
         learning_starts=args.learning_starts,
         target_update_interval=1000,
         train_freq=4,
         gradient_steps=1,
+        max_grad_norm=args.max_grad_norm,
         policy_kwargs={"net_arch": list(_get(cfg, "dqn", "net_arch", default=[256, 256]))},
         tensorboard_log=str(tb_dir),
         verbose=0,
@@ -488,6 +686,35 @@ def main() -> None:
     )
     if args.algo == "masked_dqn":
         model = MaskableDQN("MlpPolicy", train_env, double_q=args.double_q, **common_kwargs)
+    elif args.algo == "qrdqn":
+        # QRDQN: 분위수 분포 학습 → net_arch에 n_quantiles 추가, n-step 지원
+        qr_kwargs = dict(common_kwargs)
+        qr_kwargs["policy_kwargs"] = {
+            **common_kwargs["policy_kwargs"],
+            "n_quantiles": args.n_quantiles,
+        }
+        qr_kwargs["n_steps"] = args.n_steps
+        print(f"  QR-DQN: n_quantiles={args.n_quantiles}, n_steps={args.n_steps}")
+        model = MaskableQRDQN("MlpPolicy", train_env, **qr_kwargs)
+    elif args.algo == "dqfd":
+        if not use_mask:
+            print("  ⚠️  dqfd는 마스킹 전제 — --no-action-mask 권장 안 함")
+        demo_bs = args.demo_batch_size or args.batch_size
+        anneal_msg = ""
+        if args.lambda_margin_final is not None or args.lambda_bc_final is not None:
+            anneal_msg = (f", anneal→(margin={args.lambda_margin_final}, bc={args.lambda_bc_final})")
+        print(f"  DQfD: margin={args.margin}, λ_margin={args.lambda_margin}, "
+              f"λ_bc={args.lambda_bc}, λ_l2={args.lambda_l2}, demo_batch={demo_bs}, "
+              f"pretrain_steps={args.dqfd_pretrain_steps:,}{anneal_msg}")
+        model = DQfDDQN(
+            "MlpPolicy", train_env, double_q=True,
+            margin=args.margin, lambda_margin=args.lambda_margin,
+            lambda_l2=args.lambda_l2, lambda_bc=args.lambda_bc,
+            lambda_margin_final=args.lambda_margin_final,
+            lambda_bc_final=args.lambda_bc_final,
+            demo_batch_size=demo_bs,
+            **common_kwargs,
+        )
     else:
         model = DQN("MlpPolicy", train_env, **common_kwargs)
 
@@ -504,11 +731,53 @@ def main() -> None:
         model.policy.q_net_target.load_state_dict(q_net_state)
         print(f"  [pretrain] loaded q_net ({len(q_net_state)} tensors)")
 
+    # DQfD: demo(teacher) full-transition 수집 → DemoBuffer 상주 → pre-training
+    if args.algo == "dqfd":
+        # teacher 선택:
+        #  - 추상: "항상 predictive 의도"(warm-start)
+        #  - raw + forecast obs: forecast 예측형(정류소 직접) → 예측 정책으로 앵커
+        #  - 그 외: most_imbalanced
+        if args.abstract_actions:
+            from src.agents.baselines import ConstantIntentPolicy
+            from src.envs.abstract_action import ACTION_NAMES
+            pred_idx = ACTION_NAMES.index("predictive")
+            demo_policy = ConstantIntentPolicy(idx=pred_idx)
+            print(f"\n  [DQfD] 추상 action — demo = 항상 '{ACTION_NAMES[pred_idx]}' 의도(idx {pred_idx}) "
+                  f"warm-start ({len(train_episodes)} days)...")
+        elif forecast_gr is not None:
+            from scripts.eval_forecast2 import ForecastPredictivePolicy
+            demo_policy = ForecastPredictivePolicy(forecast_gr, forecast_ge, horizon=args.pred_horizon)
+            print(f"\n  [DQfD] raw 정류소 — demo = forecast 예측형(H={args.pred_horizon}) "
+                  f"({len(train_episodes)} days)...")
+        else:
+            demo_policy = None
+            print(f"\n  [DQfD] demo = most_imbalanced ({len(train_episodes)} days)...")
+        t_demo = time.time()
+        # 학습 env와 동일 reward 설정 + 마스킹 (RewardScale 미적용, 추상은 학습과 동일하게)
+        demo_env = build_env(
+            train_episodes, args.n_trucks, truck_capacity=args.truck_capacity,
+            target_fill_ratio=args.target_fill_ratio, seed=args.seed,
+            monitor_dir=None, use_action_mask=use_mask,
+            reward_scale=1.0, abstract_actions=args.abstract_actions, **train_env_kwargs,
+        )
+        d_obs, d_act, d_rew, d_next, d_done, d_mask = collect_demo_transitions(
+            demo_env, policy=demo_policy, policy_name="most_imbalanced",
+            reward_scale=args.reward_scale,
+        )
+        print(f"    collected {len(d_obs):,} transitions ({time.time()-t_demo:.1f}s), "
+              f"reward_scale={args.reward_scale} 적용")
+        demo_buffer = DemoBuffer(d_obs, d_act, d_rew, d_next, d_done, d_mask, device=model.device)
+        model.set_demo_buffer(demo_buffer)
+        if args.dqfd_pretrain_steps > 0:
+            model.pretrain_on_demos(args.dqfd_pretrain_steps, lr=args.dqfd_pretrain_lr)
+
     history: list[dict] = []
-    if args.algo == "masked_dqn":
+    # VecEnv(n_envs>1)에선 콜백이 vec-step마다 호출되므로 eval_freq를 나눠 timestep 기준 유지
+    cb_eval_freq = max(args.eval_freq // max(args.n_envs, 1), 1)
+    if args.algo in ("masked_dqn", "qrdqn", "dqfd"):
         eval_callback = MaskedEvalCallback(
             eval_env,
-            eval_freq=args.eval_freq,
+            eval_freq=cb_eval_freq,
             n_eval_episodes=len(EVAL_DATES),
             best_model_save_path=str(log_root / "best"),
             heuristic_reward=heuristic_reward,

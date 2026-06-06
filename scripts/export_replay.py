@@ -42,11 +42,17 @@ def truck_snapshot(env: RebalanceEnv, total_steps: list[int]) -> list[dict]:
 
 def compute_q_values(model, obs) -> list[float] | None:
     """현재 obs에 대한 Q값 (없으면 None)."""
+    if model is None:  # heuristic 등 Q-net 없는 정책
+        return None
     try:
         import torch
         with torch.no_grad():
-            obs_tensor, _ = model.q_net.obs_to_tensor(obs)
-            q = model.q_net(obs_tensor).cpu().numpy().flatten()
+            if hasattr(model, "quantile_net"):  # QRDQN: 분위수 평균 = 기대 Q
+                obs_tensor, _ = model.quantile_net.obs_to_tensor(obs)
+                q = model.quantile_net(obs_tensor).mean(dim=1).cpu().numpy().flatten()
+            else:
+                obs_tensor, _ = model.q_net.obs_to_tensor(obs)
+                q = model.q_net(obs_tensor).cpu().numpy().flatten()
         return q.tolist()
     except Exception as e:
         print(f"  [warn] Q-value extract failed: {e}")
@@ -57,7 +63,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", default="logs/dqn_long/best/best_model.zip",
                     help="zip 경로 (예: logs/dqn_long/best/best_model.zip, dqn_final.zip)")
-    ap.add_argument("--algo", choices=["dqn", "masked_dqn"], default="dqn")
+    ap.add_argument("--algo", choices=["dqn", "masked_dqn", "qrdqn", "heuristic"], default="dqn")
     ap.add_argument("--district", default="마포구")
     ap.add_argument("--date", default="2025-01-15")
     ap.add_argument("--n-trucks", type=int, default=3)
@@ -105,9 +111,18 @@ def main() -> None:
     )
 
     print(f"\n[2/3] loading model: {args.model} (algo={args.algo})")
-    if args.algo == "masked_dqn":
+    policy = None
+    model = None
+    if args.algo == "heuristic":
+        from src.agents.baselines import get_policy
+        policy = get_policy("most_imbalanced")
+        print("      heuristic = most_imbalanced (모델 로드 없음)")
+    elif args.algo == "masked_dqn":
         from src.agents.masked_dqn import MaskableDQN
         model = MaskableDQN.load(args.model, env=env)
+    elif args.algo == "qrdqn":
+        from src.agents.masked_qrdqn import MaskableQRDQN
+        model = MaskableQRDQN.load(args.model, env=env)
     else:
         model = DQN.load(args.model, env=env)
 
@@ -142,7 +157,9 @@ def main() -> None:
         mask = env.action_masks()
         q_vals = None if args.no_q else compute_q_values(model, obs)
 
-        if args.algo == "masked_dqn":
+        if args.algo == "heuristic":
+            action = policy.act(env)
+        elif args.algo in ("masked_dqn", "qrdqn"):
             action, _ = model.predict(obs, deterministic=True, action_masks=mask)
         else:
             action, _ = model.predict(obs, deterministic=True)

@@ -68,9 +68,14 @@ class RebalanceEnv(gym.Env):
         w_work_per_bike: float = 0.0,     # 적재/하차 1대당 양수 reward
         w_idle_visit: float = 0.0,        # 도착했는데 0대 옮긴 경우 페널티 (양수로 설정 → 음수로 적용)
         future_demand_horizon: int = 0,   # 0이면 비활성, >0이면 향후 N step 정류소별 net demand를 obs에 포함
+        forecast_rent=None,                # (T,N) 미래수요 obs를 forecast(과거평균)로. None이면 oracle(실제미래)
+        forecast_ret=None,
         seed: int | None = None,
     ):
         super().__init__()
+        # future_demand obs의 미래수요 출처: forecast 주어지면 그걸로(배포형), 아니면 oracle
+        self.forecast_rent = forecast_rent.astype(np.float32) if forecast_rent is not None else None
+        self.forecast_ret = forecast_ret.astype(np.float32) if forecast_ret is not None else None
         if isinstance(episode_data, EpisodeData):
             self._episodes = [episode_data]
         else:
@@ -406,12 +411,17 @@ class RebalanceEnv(gym.Env):
                  time_enc, cal_enc, weather_enc]
 
         # 미래 demand 인코딩 — horizon>0일 때만 포함 (옵션)
+        # forecast_rent/ret 주어지면 forecast(과거평균·배포형), 아니면 oracle(실제미래)
         if self.future_demand_horizon > 0:
             H = self.future_demand_horizon
             t_end = min(self.t + H, self.T)
             if t_end > self.t:
-                future_rent = self.data.rentals[self.t:t_end].sum(axis=0)
-                future_ret = self.data.returns[self.t:t_end].sum(axis=0)
+                if self.forecast_rent is not None:
+                    future_rent = self.forecast_rent[self.t:t_end].sum(axis=0)
+                    future_ret = self.forecast_ret[self.t:t_end].sum(axis=0)
+                else:
+                    future_rent = self.data.rentals[self.t:t_end].sum(axis=0)
+                    future_ret = self.data.returns[self.t:t_end].sum(axis=0)
                 future_net = (future_ret - future_rent).astype(np.float32)
                 cap_f = self.data.capacity.astype(np.float32)
                 future_net_norm = future_net / np.maximum(cap_f, 1.0)
