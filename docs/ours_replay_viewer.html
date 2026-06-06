@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ours RL Replay Viewer</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --ink: #1f2937;
+      --muted: #667085;
+      --line: #d9dee8;
+      --blue: #2f6fed;
+      --red: #d64f45;
+      --green: #14835d;
+      --amber: #d18800;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    header {
+      padding: 18px 24px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(520px, 1fr) 360px;
+      gap: 16px;
+      padding: 16px;
+      min-height: calc(100vh - 84px);
+    }
+    .map-panel, .side-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+    button, input[type="file"]::file-selector-button {
+      border: 1px solid #c7cedb;
+      background: #fff;
+      color: var(--ink);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button.primary {
+      color: #fff;
+      background: var(--blue);
+      border-color: var(--blue);
+    }
+    input[type="range"] {
+      flex: 1;
+      min-width: 180px;
+    }
+    #map {
+      width: 100%;
+      height: calc(100vh - 174px);
+      min-height: 520px;
+      display: block;
+      background:
+        linear-gradient(90deg, rgba(31,41,55,0.045) 1px, transparent 1px),
+        linear-gradient(rgba(31,41,55,0.045) 1px, transparent 1px);
+      background-size: 48px 48px;
+    }
+    .side-panel {
+      padding: 14px;
+      overflow-y: auto;
+      max-height: calc(100vh - 116px);
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px;
+      background: #fbfcff;
+    }
+    .metric .label {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 3px;
+    }
+    .metric .value {
+      font-weight: 700;
+      font-size: 15px;
+    }
+    h2 {
+      font-size: 15px;
+      margin: 18px 0 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th, td {
+      padding: 7px 6px;
+      border-bottom: 1px solid var(--line);
+      text-align: right;
+      white-space: nowrap;
+    }
+    th:first-child, td:first-child,
+    th:nth-child(2), td:nth-child(2) {
+      text-align: left;
+    }
+    .legend {
+      display: grid;
+      gap: 7px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 12px;
+    }
+    .dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: -1px;
+    }
+    .empty { background: var(--red); }
+    .balanced { background: var(--green); }
+    .full { background: var(--amber); }
+    .candidate { background: var(--blue); }
+    .hint {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    @media (max-width: 980px) {
+      main { grid-template-columns: 1fr; }
+      #map { height: 560px; }
+      .side-panel { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Ours RL Replay Viewer</h1>
+    <div class="sub">
+      REINFORCE/A2C 모델이 실제 episode에서 어떤 정류소를 선택하고, 트럭이 어떻게 이동하는지 확인하는 별도 viewer입니다.
+      기존 팀원 DQN viewer는 수정하지 않았습니다.
+    </div>
+  </header>
+
+  <main>
+    <section class="map-panel">
+      <div class="toolbar">
+        <input id="file-input" type="file" accept=".json,application/json" />
+        <button id="load-default">샘플 열기</button>
+        <button id="prev">◀</button>
+        <button id="play" class="primary">재생</button>
+        <button id="next">▶</button>
+        <input id="slider" type="range" min="0" max="0" value="0" />
+        <span id="step-label" class="sub">0 / 0</span>
+      </div>
+      <svg id="map" role="img" aria-label="따릉이 재배치 replay map"></svg>
+    </section>
+
+    <aside class="side-panel">
+      <h2>Episode</h2>
+      <div id="meta" class="sub">JSON 파일을 선택하세요.</div>
+      <div class="metric-grid">
+        <div class="metric"><span class="label">누적 reward</span><span id="m-reward" class="value">-</span></div>
+        <div class="metric"><span class="label">현재 step</span><span id="m-step" class="value">-</span></div>
+        <div class="metric"><span class="label">stockout</span><span id="m-stockout" class="value">-</span></div>
+        <div class="metric"><span class="label">full</span><span id="m-full" class="value">-</span></div>
+        <div class="metric"><span class="label">이동 km</span><span id="m-km" class="value">-</span></div>
+        <div class="metric"><span class="label">선택 정류소</span><span id="m-action" class="value">-</span></div>
+      </div>
+
+      <h2>Top-K 후보 확률</h2>
+      <table>
+        <thead>
+          <tr><th>rank</th><th>station</th><th>prob</th></tr>
+        </thead>
+        <tbody id="candidates"></tbody>
+      </table>
+
+      <h2>Legend</h2>
+      <div class="legend">
+        <div><span class="dot empty"></span>재고 비율 낮음</div>
+        <div><span class="dot balanced"></span>목표 재고 근처</div>
+        <div><span class="dot full"></span>재고 비율 높음</div>
+        <div><span class="dot candidate"></span>현재 Top-K 후보</div>
+      </div>
+      <div class="hint">
+        원 크기는 정류소 capacity에 비례하고, 파란 테두리는 현재 정책이 고려한 Top-K 후보입니다.
+        트럭은 번호가 있는 사각형으로 표시되며 이동 중이면 목적지까지 선이 그려집니다.
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const DEFAULT_JSON = "ours_replay_reinforce_강남구_2025-03-25.json";
+    let replay = null;
+    let index = 0;
+    let playing = false;
+    let timer = null;
+    let project = null;
+
+    const $ = (id) => document.getElementById(id);
+    const svg = $("map");
+
+    function fmt(value, digits = 1) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return Number(value).toFixed(digits);
+    }
+
+    function make(tag, attrs = {}) {
+      const el = document.createElementNS(SVG_NS, tag);
+      for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+      return el;
+    }
+
+    function setupProjection(coords) {
+      const width = svg.clientWidth || 900;
+      const height = svg.clientHeight || 620;
+      const lats = coords.map((c) => Number(c[0]));
+      const lons = coords.map((c) => Number(c[1]));
+      const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+      const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+      const pad = 38;
+      return ([lat, lon]) => {
+        const x = pad + ((Number(lon) - minLon) / Math.max(maxLon - minLon, 1e-9)) * (width - pad * 2);
+        const y = height - pad - ((Number(lat) - minLat) / Math.max(maxLat - minLat, 1e-9)) * (height - pad * 2);
+        return [x, y];
+      };
+    }
+
+    function stationColor(ratio) {
+      if (ratio < 0.25) return "#d64f45";
+      if (ratio > 0.75) return "#d18800";
+      return "#14835d";
+    }
+
+    function draw() {
+      if (!replay) return;
+      const snap = replay.snapshots[index];
+      const meta = replay.meta;
+      project = project || setupProjection(meta.station_coords);
+      svg.innerHTML = "";
+
+      const candidateSet = new Set((snap.candidate_station_indices || []).map(Number));
+      const capacities = meta.station_capacities || [];
+      const maxCap = Math.max(...capacities, 1);
+
+      meta.station_coords.forEach((coord, i) => {
+        const [x, y] = project(coord);
+        const cap = Math.max(Number(capacities[i] || 20), 1);
+        const bikes = Number(snap.bikes[i] || 0);
+        const ratio = bikes / cap;
+        const r = 3.5 + Math.sqrt(cap / maxCap) * 7;
+        const circle = make("circle", {
+          cx: x, cy: y, r,
+          fill: stationColor(ratio),
+          "fill-opacity": 0.72,
+          stroke: candidateSet.has(i) ? "#2f6fed" : "#ffffff",
+          "stroke-width": candidateSet.has(i) ? 3 : 1,
+        });
+        circle.appendChild(document.createElementNS(SVG_NS, "title"))
+          .textContent = `${meta.station_ids[i]} bikes=${bikes}/${cap}`;
+        svg.appendChild(circle);
+      });
+
+      (snap.trucks || []).forEach((truck, i) => {
+        const locCoord = meta.station_coords[truck.loc];
+        const destCoord = meta.station_coords[truck.dest];
+        if (!locCoord) return;
+        let [x, y] = project(locCoord);
+        if (truck.remaining > 0 && destCoord) {
+          const [dx, dy] = project(destCoord);
+          const total = Math.max(Number(truck.total_steps || truck.remaining), 1);
+          const progress = 1 - Number(truck.remaining) / total;
+          const line = make("line", { x1: x, y1: y, x2: dx, y2: dy, stroke: "#344054", "stroke-width": 1.4, "stroke-dasharray": "4 4" });
+          svg.appendChild(line);
+          x = x + (dx - x) * progress;
+          y = y + (dy - y) * progress;
+        }
+        const group = make("g");
+        group.appendChild(make("rect", { x: x - 11, y: y - 11, width: 22, height: 22, rx: 4, fill: "#111827" }));
+        const text = make("text", { x, y: y + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "#ffffff" });
+        text.textContent = String(i + 1);
+        group.appendChild(text);
+        group.appendChild(document.createElementNS(SVG_NS, "title"))
+          .textContent = `truck ${i + 1}, load=${truck.load}, remaining=${truck.remaining}`;
+        svg.appendChild(group);
+      });
+
+      updateSidePanel(snap, meta);
+    }
+
+    function updateSidePanel(snap, meta) {
+      $("meta").textContent = `${meta.district} · ${meta.date} · ${meta.algo} · ${meta.state} · Top-K ${meta.candidate_top_k}`;
+      $("m-reward").textContent = fmt(snap.cum_reward);
+      $("m-step").textContent = `${snap.rl_step} / ${meta.rl_steps}`;
+      $("m-stockout").textContent = String(snap.cum_stockout);
+      $("m-full").textContent = String(snap.cum_full);
+      $("m-km").textContent = fmt(snap.cum_km);
+      $("m-action").textContent = snap.action_name || "-";
+      $("step-label").textContent = `${index} / ${replay.snapshots.length - 1}`;
+      $("slider").value = String(index);
+
+      const rows = (snap.candidate_rows || []).slice(0, 12)
+        .map((row) => `<tr><td>${row.rank}</td><td>${row.station_id}</td><td>${(row.prob * 100).toFixed(1)}%</td></tr>`)
+        .join("");
+      $("candidates").innerHTML = rows || `<tr><td colspan="3">후보 정보 없음</td></tr>`;
+    }
+
+    function loadReplay(obj) {
+      replay = obj;
+      index = 0;
+      project = null;
+      $("slider").max = String(replay.snapshots.length - 1);
+      draw();
+    }
+
+    async function loadDefault() {
+      const response = await fetch(DEFAULT_JSON);
+      if (!response.ok) throw new Error(`${DEFAULT_JSON} 파일을 찾을 수 없습니다.`);
+      loadReplay(await response.json());
+    }
+
+    $("file-input").addEventListener("change", async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+      loadReplay(JSON.parse(await file.text()));
+    });
+    $("load-default").addEventListener("click", () => loadDefault().catch((err) => alert(err.message)));
+    $("slider").addEventListener("input", (event) => { index = Number(event.target.value); draw(); });
+    $("prev").addEventListener("click", () => { if (!replay) return; index = Math.max(0, index - 1); draw(); });
+    $("next").addEventListener("click", () => { if (!replay) return; index = Math.min(replay.snapshots.length - 1, index + 1); draw(); });
+    $("play").addEventListener("click", () => {
+      if (!replay) return;
+      playing = !playing;
+      $("play").textContent = playing ? "정지" : "재생";
+      if (timer) clearInterval(timer);
+      if (playing) {
+        timer = setInterval(() => {
+          if (!replay || index >= replay.snapshots.length - 1) {
+            playing = false;
+            $("play").textContent = "재생";
+            clearInterval(timer);
+            return;
+          }
+          index += 1;
+          draw();
+        }, 260);
+      }
+    });
+
+    window.addEventListener("resize", () => { project = null; draw(); });
+    loadDefault().catch(() => {});
+  </script>
+</body>
+</html>
