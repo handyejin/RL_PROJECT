@@ -79,11 +79,17 @@ ENV_KW = dict(
 )
 
 
-def load_episodes(dates: list[str], district: str, processed_dir: str = "data/processed") -> list:
+def load_episodes(
+    dates: list[str],
+    district: str,
+    processed_dir: str = "data/processed",
+    progress_label: str | None = None,
+) -> list:
     """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
+    date_iter = tqdm(dates, desc=progress_label, unit="day") if progress_label else dates
     return [
         load_episode(processed_dir, district=district, episode_start=f"{date} 00:00")
-        for date in dates
+        for date in date_iter
     ]
 
 
@@ -254,8 +260,18 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """MaskablePPO 학습 루프와 주기적 7일 평가, best/final 저장을 실행한다."""
     args = parse_args()
-    train_episodes = load_episodes(TRAIN_DATES[: args.n_train_dates], args.district, args.processed_dir)
-    eval_episodes = load_episodes(EVAL_DATES, args.district, args.processed_dir)
+    train_episodes = load_episodes(
+        TRAIN_DATES[: args.n_train_dates],
+        args.district,
+        args.processed_dir,
+        f"PPO {args.district} load train" if args.progress else None,
+    )
+    eval_episodes = load_episodes(
+        EVAL_DATES,
+        args.district,
+        args.processed_dir,
+        f"PPO {args.district} load eval" if args.progress else None,
+    )
     all_episodes = train_episodes + eval_episodes
 
     capacity_stats = apply_capacity_override(
