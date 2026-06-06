@@ -202,7 +202,7 @@
         <select id="replay-select" aria-label="replay JSON 선택">
           <option value="">JSON 목록 불러오는 중...</option>
         </select>
-        <button id="load-default">샘플 열기</button>
+        <button id="sync-json">SYNC</button>
         <button id="prev">◀</button>
         <button id="play" class="primary">재생</button>
         <button id="next">▶</button>
@@ -442,7 +442,7 @@
       $("candidates").innerHTML = rows || `<tr><td colspan="3">후보 정보 없음</td></tr>`;
     }
 
-    function loadReplay(obj, fileName = "샘플 JSON") {
+    function loadReplay(obj, fileName = "replay JSON") {
       replay = obj;
       index = 0;
       project = null;
@@ -455,10 +455,6 @@
       const response = await fetch(fileName);
       if (!response.ok) throw new Error(`${fileName} 파일을 찾을 수 없습니다.`);
       loadReplay(await response.json(), fileName);
-    }
-
-    async function loadDefault() {
-      await loadReplayFile(DEFAULT_JSON);
     }
 
     async function refreshReplayList() {
@@ -480,6 +476,7 @@
         .map((name) => `<option value="${name}">${name}</option>`)
         .join("");
       select.value = files.includes(DEFAULT_JSON) ? DEFAULT_JSON : files[0];
+      return select.value;
     }
 
     $("replay-select").addEventListener("change", () => {
@@ -487,7 +484,11 @@
       if (!fileName) return;
       loadReplayFile(fileName).catch((err) => alert(err.message));
     });
-    $("load-default").addEventListener("click", () => loadDefault().catch((err) => alert(err.message)));
+    $("sync-json").addEventListener("click", () => {
+      refreshReplayList()
+        .then((fileName) => fileName && loadReplayFile(fileName))
+        .catch((err) => alert(err.message));
+    });
     $("slider").addEventListener("input", (event) => { index = Number(event.target.value); draw(); });
     $("prev").addEventListener("click", () => { if (!replay) return; index = Math.max(0, index - 1); draw(); });
     $("next").addEventListener("click", () => { if (!replay) return; index = Math.min(replay.snapshots.length - 1, index + 1); draw(); });
@@ -511,7 +512,9 @@
     });
 
     window.addEventListener("resize", () => { project = null; draw(); });
-    refreshReplayList().then(() => loadDefault()).catch(() => {});
+    refreshReplayList()
+      .then((fileName) => fileName && loadReplayFile(fileName))
+      .catch(() => {});
   </script>
 </body>
 </html>
