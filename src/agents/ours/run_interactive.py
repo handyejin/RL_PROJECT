@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -215,7 +216,10 @@ def main() -> None:
         print(" ".join(cmd))
         if args.dry_run:
             continue
-        code = subprocess.run(cmd, cwd=PROJECT_ROOT).returncode
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONPATH"] = str(PROJECT_ROOT)
+        code = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env).returncode
         if code != 0:
             raise SystemExit(code)
 

@@ -537,9 +537,15 @@ def main() -> None:
     if args.device in {"cpu", "mps"}:
         device = torch.device(args.device)
 
+    print(
+        f"[REINFORCE:{args.district}] loading episodes "
+        f"(train={args.n_train_dates}, eval={len(EVAL_DATES)})...",
+        flush=True,
+    )
     train_episodes = load_episodes(TRAIN_DATES[: args.n_train_dates], args.district, args.processed_dir)
     eval_episodes = load_episodes(EVAL_DATES, args.district, args.processed_dir)
     all_episodes = train_episodes + eval_episodes
+    print(f"[REINFORCE:{args.district}] applying capacity/forecast data...", flush=True)
     capacity_stats = apply_capacity_override(
         all_episodes,
         args.capacity_path,
@@ -551,6 +557,7 @@ def main() -> None:
     sample_env = make_env(eval_episodes[0], args)
     obs_dim = int(sample_env.observation_space.shape[0])
     n_actions = int(sample_env.action_space.n)
+    print(f"[REINFORCE:{args.district}] setup complete. starting training...", flush=True)
 
     policy = PolicyNetwork(
         obs_dim,

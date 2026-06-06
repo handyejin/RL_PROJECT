@@ -640,10 +640,16 @@ def main() -> None:
     val_start = args.n_train_dates
     val_end = args.n_train_dates + args.bc_val_dates
     val_dates = TRAIN_DATES[val_start:val_end]
+    print(
+        f"[A2C:{args.district}] loading episodes "
+        f"(train={len(train_dates)}, val={len(val_dates)}, eval={len(EVAL_DATES)})...",
+        flush=True,
+    )
     train_episodes = load_episodes(train_dates, args.district, args.processed_dir)
     bc_val_episodes = load_episodes(val_dates, args.district, args.processed_dir) if args.bc_val_dates > 0 else []
     eval_episodes = load_episodes(EVAL_DATES, args.district, args.processed_dir)
     all_episodes = train_episodes + bc_val_episodes + eval_episodes
+    print(f"[A2C:{args.district}] applying capacity/forecast data...", flush=True)
     capacity_stats = apply_capacity_override(
         all_episodes,
         args.capacity_path,
@@ -655,6 +661,7 @@ def main() -> None:
     sample_env = make_env(eval_episodes[0], args)
     obs_dim = int(sample_env.observation_space.shape[0])
     n_actions = int(sample_env.action_space.n)
+    print(f"[A2C:{args.district}] setup complete. starting training...", flush=True)
 
     policy = PolicyNetwork(
         obs_dim,
