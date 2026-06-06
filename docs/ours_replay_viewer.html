@@ -351,6 +351,7 @@
       const cap = Math.max(Number((meta.station_capacities || [])[stationIndex] || 20), 1);
       const bikes = Number((snap.bikes || [])[stationIndex] || 0);
       const ratio = bikes / cap;
+      const coord = (meta.station_coords || [])[stationIndex] || [null, null];
       const candidate = (snap.candidate_rows || []).find((row) => Number(row.station_index) === Number(stationIndex));
       const candidateText = candidate
         ? `후보 rank ${candidate.rank}, 확률 ${(candidate.prob * 100).toFixed(1)}%`
@@ -360,6 +361,8 @@
         bikes,
         cap,
         ratio,
+        lat: coord[0],
+        lon: coord[1],
         candidateText,
       };
     }
@@ -374,6 +377,7 @@
         <strong>${info.stationId}</strong>
         <div>재고: ${info.bikes} / ${info.cap}</div>
         <div>재고 비율: ${(info.ratio * 100).toFixed(1)}%</div>
+        <div>위치: ${Number(info.lat).toFixed(6)}, ${Number(info.lon).toFixed(6)}</div>
         <div>${info.candidateText}</div>
       `;
     }
@@ -401,19 +405,33 @@
         const cap = Math.max(Number(capacities[i] || 20), 1);
         const bikes = Number(snap.bikes[i] || 0);
         const ratio = bikes / cap;
-        const isSelected = selectedStation === i;
-        const r = 3.5 + Math.sqrt(cap / maxCap) * 7 + (isSelected ? 4 : 0);
+        const baseRadius = 3.5 + Math.sqrt(cap / maxCap) * 7;
         const circle = make("circle", {
-          cx: x, cy: y, r,
+          cx: x, cy: y, r: baseRadius,
           fill: stationColor(ratio),
           "fill-opacity": 0.72,
-          stroke: isSelected ? "#111827" : (candidateSet.has(i) ? "#2f6fed" : "#ffffff"),
-          "stroke-width": isSelected ? 4 : (candidateSet.has(i) ? 3 : 1),
+          stroke: candidateSet.has(i) ? "#2f6fed" : "#ffffff",
+          "stroke-width": candidateSet.has(i) ? 3 : 1,
           cursor: "pointer",
           "data-station-index": i,
+          "data-base-radius": baseRadius,
+          "data-base-stroke": candidateSet.has(i) ? "#2f6fed" : "#ffffff",
+          "data-base-stroke-width": candidateSet.has(i) ? 3 : 1,
         });
         circle.appendChild(document.createElementNS(SVG_NS, "title"))
           .textContent = `${meta.station_ids[i]} bikes=${bikes}/${cap}`;
+        circle.addEventListener("mouseenter", () => {
+          circle.setAttribute("r", String(baseRadius + 3));
+          circle.setAttribute("stroke", "#1d4ed8");
+          circle.setAttribute("stroke-width", "3");
+          circle.setAttribute("fill-opacity", "0.92");
+        });
+        circle.addEventListener("mouseleave", () => {
+          circle.setAttribute("r", String(baseRadius));
+          circle.setAttribute("stroke", circle.dataset.baseStroke || "#ffffff");
+          circle.setAttribute("stroke-width", circle.dataset.baseStrokeWidth || "1");
+          circle.setAttribute("fill-opacity", "0.72");
+        });
         circle.addEventListener("click", () => selectStation(i));
         svg.appendChild(circle);
       });
