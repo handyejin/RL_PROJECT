@@ -202,7 +202,6 @@
         <select id="replay-select" aria-label="replay JSON 선택">
           <option value="">JSON 목록 불러오는 중...</option>
         </select>
-        <button id="sync-json">SYNC</button>
         <button id="prev">◀</button>
         <button id="play" class="primary">재생</button>
         <button id="next">▶</button>
@@ -483,11 +482,6 @@
       const fileName = $("replay-select").value;
       if (!fileName) return;
       loadReplayFile(fileName).catch((err) => alert(err.message));
-    });
-    $("sync-json").addEventListener("click", () => {
-      refreshReplayList()
-        .then((fileName) => fileName && loadReplayFile(fileName))
-        .catch((err) => alert(err.message));
     });
     $("slider").addEventListener("input", (event) => { index = Number(event.target.value); draw(); });
     $("prev").addEventListener("click", () => { if (!replay) return; index = Math.max(0, index - 1); draw(); });
