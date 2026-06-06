@@ -252,7 +252,7 @@ def main() -> None:
     out_path = (
         _project_path(args.out)
         if args.out
-        else PROJECT_ROOT / "docs" / f"ours_replay_{args.algorithm}_{args.district}_{args.date}.json"
+        else PROJECT_ROOT / "docs" / f"{args.district}_{args.algorithm.upper()}_{args.date}.json"
     )
 
     print(f"[1/4] loading episode: {args.district} {args.date}", flush=True)

@@ -253,7 +253,7 @@
 
   <script>
     const SVG_NS = "http://www.w3.org/2000/svg";
-    const DEFAULT_JSON = "ours_replay_reinforce_강남구_2025-03-25.json";
+    const DEFAULT_JSON = "강남구_REINFORCE_2025-03-25.json";
     let replay = null;
     let index = 0;
     let playing = false;
@@ -467,7 +467,7 @@
         const discovered = Array.from(doc.querySelectorAll("a"))
           .map((a) => decodeURIComponent(a.getAttribute("href") || ""))
           .map((href) => href.split("/").pop())
-          .filter((name) => /^ours_replay_.*\.json$/u.test(name));
+          .filter((name) => /_(REINFORCE|A2C|PPO|DQN)_\d{4}-\d{2}-\d{2}\.json$/u.test(name));
         files = Array.from(new Set([...discovered, DEFAULT_JSON])).sort();
       } catch (err) {
         files = [DEFAULT_JSON];
