@@ -109,6 +109,16 @@
       background: var(--blue);
       border-color: var(--blue);
     }
+    select {
+      min-width: 280px;
+      max-width: min(520px, 100%);
+      border: 1px solid #c7cedb;
+      background: #fff;
+      color: var(--ink);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 13px;
+    }
     input[type="range"] {
       flex: 1;
       min-width: 180px;
@@ -221,6 +231,10 @@
   <main>
     <section class="map-panel">
       <div class="toolbar">
+        <select id="replay-select" aria-label="replay JSON 선택">
+          <option value="">JSON 목록 불러오는 중...</option>
+        </select>
+        <button id="load-selected">선택 JSON 열기</button>
         <input id="file-input" type="file" accept=".json,application/json" />
         <button id="load-default">샘플 열기</button>
         <button id="prev">◀</button>
@@ -407,16 +421,46 @@
       draw();
     }
 
+    async function loadReplayFile(fileName) {
+      const response = await fetch(fileName);
+      if (!response.ok) throw new Error(`${fileName} 파일을 찾을 수 없습니다.`);
+      loadReplay(await response.json(), fileName);
+    }
+
     async function loadDefault() {
-      const response = await fetch(DEFAULT_JSON);
-      if (!response.ok) throw new Error(`${DEFAULT_JSON} 파일을 찾을 수 없습니다.`);
-      loadReplay(await response.json(), DEFAULT_JSON);
+      await loadReplayFile(DEFAULT_JSON);
+    }
+
+    async function refreshReplayList() {
+      const select = $("replay-select");
+      let files = [DEFAULT_JSON];
+      try {
+        const response = await fetch("./");
+        const html = await response.text();
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const discovered = Array.from(doc.querySelectorAll("a"))
+          .map((a) => decodeURIComponent(a.getAttribute("href") || ""))
+          .map((href) => href.split("/").pop())
+          .filter((name) => /^ours_replay_.*\.json$/u.test(name));
+        files = Array.from(new Set([...discovered, DEFAULT_JSON])).sort();
+      } catch (err) {
+        files = [DEFAULT_JSON];
+      }
+      select.innerHTML = files
+        .map((name) => `<option value="${name}">${name}</option>`)
+        .join("");
+      select.value = files.includes(DEFAULT_JSON) ? DEFAULT_JSON : files[0];
     }
 
     $("file-input").addEventListener("change", async (event) => {
       const file = event.target.files[0];
       if (!file) return;
       loadReplay(JSON.parse(await file.text()), file.name);
+    });
+    $("load-selected").addEventListener("click", () => {
+      const fileName = $("replay-select").value;
+      if (!fileName) return;
+      loadReplayFile(fileName).catch((err) => alert(err.message));
     });
     $("load-default").addEventListener("click", () => loadDefault().catch((err) => alert(err.message)));
     $("slider").addEventListener("input", (event) => { index = Number(event.target.value); draw(); });
@@ -442,7 +486,7 @@
     });
 
     window.addEventListener("resize", () => { project = null; draw(); });
-    loadDefault().catch(() => {});
+    refreshReplayList().then(() => loadDefault()).catch(() => {});
   </script>
 </body>
 </html>
