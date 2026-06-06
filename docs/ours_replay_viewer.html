@@ -33,42 +33,6 @@
       font-size: 22px;
       letter-spacing: 0;
     }
-    .header-row {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-    .badges {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      margin-top: 6px;
-    }
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      min-height: 24px;
-      padding: 3px 8px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: #f8fafc;
-      color: #344054;
-      font-size: 12px;
-      font-weight: 650;
-    }
-    .badge.strong {
-      color: #ffffff;
-      background: var(--blue);
-      border-color: var(--blue);
-    }
-    .algo-note {
-      color: var(--muted);
-      font-size: 12px;
-      line-height: 1.55;
-      max-width: 620px;
-    }
     .sub {
       color: var(--muted);
       font-size: 13px;
@@ -95,7 +59,7 @@
       border-bottom: 1px solid var(--line);
       flex-wrap: wrap;
     }
-    button, input[type="file"]::file-selector-button {
+    button {
       border: 1px solid #c7cedb;
       background: #fff;
       color: var(--ink);
@@ -229,19 +193,7 @@
 </head>
 <body>
   <header>
-    <div class="header-row">
-      <div>
-        <h1>Replay Viewer</h1>
-        <div id="header-meta" class="badges">
-          <span class="badge strong">JSON 대기 중</span>
-        </div>
-      </div>
-      <div class="algo-note">
-        <strong>지원 알고리즘</strong>:
-        REINFORCE, A2C, PPO, DQN replay JSON을 같은 형식으로 확인할 수 있습니다.
-        현재 화면은 선택한 JSON의 metadata를 기준으로 구/날짜/알고리즘을 표시합니다.
-      </div>
-    </div>
+    <h1>Replay Viewer</h1>
   </header>
 
   <main>
@@ -250,15 +202,12 @@
         <select id="replay-select" aria-label="replay JSON 선택">
           <option value="">JSON 목록 불러오는 중...</option>
         </select>
-        <button id="load-selected">선택 JSON 열기</button>
-        <input id="file-input" type="file" accept=".json,application/json" />
         <button id="load-default">샘플 열기</button>
         <button id="prev">◀</button>
         <button id="play" class="primary">재생</button>
         <button id="next">▶</button>
         <input id="slider" type="range" min="0" max="0" value="0" />
         <span id="step-label" class="sub">0 / 0</span>
-        <span id="file-label" class="sub">파일 미선택</span>
       </div>
       <svg id="map" role="img" aria-label="따릉이 재배치 replay map"></svg>
     </section>
@@ -463,21 +412,7 @@
       updateSidePanel(snap, meta);
     }
 
-    function updateHeader(meta) {
-      const algo = String(meta.algo || "-").toUpperCase();
-      const state = meta.state || "original";
-      const topK = meta.candidate_top_k ? `Top-K ${meta.candidate_top_k}` : "전체 action";
-      $("header-meta").innerHTML = `
-        <span class="badge strong">${meta.district || "-"}</span>
-        <span class="badge">${meta.date || "-"}</span>
-        <span class="badge">${algo}</span>
-        <span class="badge">${state}</span>
-        <span class="badge">${topK}</span>
-      `;
-    }
-
     function updateSidePanel(snap, meta) {
-      updateHeader(meta);
       $("meta").textContent = `${meta.district} · ${meta.date} · ${String(meta.algo || "-").toUpperCase()} · ${meta.state} · Top-K ${meta.candidate_top_k}`;
       $("m-reward").textContent = fmt(snap.cum_reward);
       $("m-step").textContent = `${snap.rl_step} / ${meta.rl_steps}`;
@@ -501,7 +436,6 @@
       project = null;
       selectedStation = null;
       $("slider").max = String(replay.snapshots.length - 1);
-      $("file-label").textContent = fileName;
       draw();
     }
 
@@ -536,12 +470,7 @@
       select.value = files.includes(DEFAULT_JSON) ? DEFAULT_JSON : files[0];
     }
 
-    $("file-input").addEventListener("change", async (event) => {
-      const file = event.target.files[0];
-      if (!file) return;
-      loadReplay(JSON.parse(await file.text()), file.name);
-    });
-    $("load-selected").addEventListener("click", () => {
+    $("replay-select").addEventListener("change", () => {
       const fileName = $("replay-select").value;
       if (!fileName) return;
       loadReplayFile(fileName).catch((err) => alert(err.message));
