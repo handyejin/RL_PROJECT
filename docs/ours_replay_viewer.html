@@ -198,6 +198,22 @@
     .balanced { background: var(--green); }
     .full { background: var(--amber); }
     .candidate { background: var(--blue); }
+    .station-info {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fbfcff;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+    .station-info strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .station-info .muted {
+      color: var(--muted);
+    }
     .hint {
       margin-top: 12px;
       color: var(--muted);
@@ -267,6 +283,11 @@
         <tbody id="candidates"></tbody>
       </table>
 
+      <h2>선택 정류소</h2>
+      <div id="station-info" class="station-info">
+        <span class="muted">지도에서 정류소를 클릭하세요.</span>
+      </div>
+
       <h2>Legend</h2>
       <div class="legend">
         <div><span class="dot empty"></span>재고 비율 낮음</div>
@@ -289,6 +310,7 @@
     let playing = false;
     let timer = null;
     let project = null;
+    let selectedStation = null;
 
     const $ = (id) => document.getElementById(id);
     const svg = $("map");
@@ -325,6 +347,44 @@
       return "#14835d";
     }
 
+    function stationSummary(stationIndex, snap, meta) {
+      const cap = Math.max(Number((meta.station_capacities || [])[stationIndex] || 20), 1);
+      const bikes = Number((snap.bikes || [])[stationIndex] || 0);
+      const ratio = bikes / cap;
+      const candidate = (snap.candidate_rows || []).find((row) => Number(row.station_index) === Number(stationIndex));
+      const candidateText = candidate
+        ? `후보 rank ${candidate.rank}, 확률 ${(candidate.prob * 100).toFixed(1)}%`
+        : "현재 Top-K 후보 아님";
+      return {
+        stationId: meta.station_ids[stationIndex],
+        bikes,
+        cap,
+        ratio,
+        candidateText,
+      };
+    }
+
+    function updateStationInfo(stationIndex, snap, meta) {
+      if (stationIndex === null || stationIndex === undefined) {
+        $("station-info").innerHTML = `<span class="muted">지도에서 정류소를 클릭하세요.</span>`;
+        return;
+      }
+      const info = stationSummary(stationIndex, snap, meta);
+      $("station-info").innerHTML = `
+        <strong>${info.stationId}</strong>
+        <div>재고: ${info.bikes} / ${info.cap}</div>
+        <div>재고 비율: ${(info.ratio * 100).toFixed(1)}%</div>
+        <div>${info.candidateText}</div>
+      `;
+    }
+
+    function selectStation(stationIndex) {
+      selectedStation = Number(stationIndex);
+      draw();
+    }
+
+    window.selectStation = selectStation;
+
     function draw() {
       if (!replay) return;
       const snap = replay.snapshots[index];
@@ -341,16 +401,20 @@
         const cap = Math.max(Number(capacities[i] || 20), 1);
         const bikes = Number(snap.bikes[i] || 0);
         const ratio = bikes / cap;
-        const r = 3.5 + Math.sqrt(cap / maxCap) * 7;
+        const isSelected = selectedStation === i;
+        const r = 3.5 + Math.sqrt(cap / maxCap) * 7 + (isSelected ? 4 : 0);
         const circle = make("circle", {
           cx: x, cy: y, r,
           fill: stationColor(ratio),
           "fill-opacity": 0.72,
-          stroke: candidateSet.has(i) ? "#2f6fed" : "#ffffff",
-          "stroke-width": candidateSet.has(i) ? 3 : 1,
+          stroke: isSelected ? "#111827" : (candidateSet.has(i) ? "#2f6fed" : "#ffffff"),
+          "stroke-width": isSelected ? 4 : (candidateSet.has(i) ? 3 : 1),
+          cursor: "pointer",
+          "data-station-index": i,
         });
         circle.appendChild(document.createElementNS(SVG_NS, "title"))
           .textContent = `${meta.station_ids[i]} bikes=${bikes}/${cap}`;
+        circle.addEventListener("click", () => selectStation(i));
         svg.appendChild(circle);
       });
 
@@ -405,6 +469,7 @@
       $("m-action").textContent = snap.action_name || "-";
       $("step-label").textContent = `${index} / ${replay.snapshots.length - 1}`;
       $("slider").value = String(index);
+      updateStationInfo(selectedStation, snap, meta);
 
       const rows = (snap.candidate_rows || []).slice(0, 12)
         .map((row) => `<tr><td>${row.rank}</td><td>${row.station_id}</td><td>${(row.prob * 100).toFixed(1)}%</td></tr>`)
@@ -416,6 +481,7 @@
       replay = obj;
       index = 0;
       project = null;
+      selectedStation = null;
       $("slider").max = String(replay.snapshots.length - 1);
       $("file-label").textContent = fileName;
       draw();
