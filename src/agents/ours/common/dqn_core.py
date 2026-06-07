@@ -7,6 +7,7 @@
 알고리즘:
     Masked DQN
     + Double DQN target 옵션
+    + Dueling Q-network 옵션
     + forecast_projected_travel state feature
     + 실제 거치대 수(capacity) agent-local 반영
 
@@ -20,8 +21,8 @@ Action:
     action mask를 적용해 불가능한 정류소 선택을 막는다.
 
 Reward:
-    원본 RebalanceEnv reward를 그대로 사용한다.
-    reward = -stockout_cost - full_cost - travel_cost
+    평가는 원본 RebalanceEnv reward를 그대로 사용한다.
+    학습에서는 선택적으로 reward scale만 줄여 DQN TD target의 크기를 안정화한다.
 """
 
 from __future__ import annotations
@@ -31,10 +32,14 @@ import copy
 import random
 from pathlib import Path
 
+import gymnasium as gym
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, create_mlp
 from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.dqn.policies import DQNPolicy
 from tqdm.auto import tqdm
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -42,11 +47,99 @@ from src.agents.baselines import get_policy
 from src.agents.ours.common.bc_utils import collect_bc_data
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
+from src.agents.ours.common.episode_cache import load_episodes_cached
 from src.agents.ours.common.future_demand import maybe_wrap_future_demand
 from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
 from src.agents.masked_dqn import MaskableDQN
 from src.envs.data_loader import load_episode
 from src.envs.rebalance_env import RebalanceEnv
+
+
+class DuelingQNetwork(torch.nn.Module):
+    """Dueling DQN Q-network.
+
+    Q(s, a)를 상태 가치 V(s)와 행동 advantage A(s, a)로 나누어 추정한다.
+    Top-K 후보 구조에서는 "현재 상태 자체가 좋은지"와 "후보 rank 중 무엇이 좋은지"가
+    섞이기 쉬우므로, DQN 안정화 실험에서 선택적으로 사용한다.
+    """
+
+    def __init__(
+        self,
+        observation_space: gym.Space,
+        action_space: gym.spaces.Discrete,
+        features_extractor: BaseFeaturesExtractor,
+        features_dim: int,
+        net_arch: list[int] | None = None,
+        activation_fn: type[nn.Module] = nn.ReLU,
+        normalize_images: bool = True,
+    ) -> None:
+        super().__init__()
+        self.observation_space = observation_space
+        self.action_space = action_space
+        self.features_extractor = features_extractor
+        self.features_dim = features_dim
+        self.net_arch = net_arch or [64, 64]
+        self.activation_fn = activation_fn
+        self.normalize_images = normalize_images
+        action_dim = int(action_space.n)
+
+        value_net = create_mlp(features_dim, 1, self.net_arch, activation_fn)
+        advantage_net = create_mlp(features_dim, action_dim, self.net_arch, activation_fn)
+        self.value_net = nn.Sequential(*value_net)
+        self.advantage_net = nn.Sequential(*advantage_net)
+
+    @property
+    def device(self):
+        """SB3 policy 저장/로드 호환을 위한 device property."""
+        return next(self.parameters()).device
+
+    def extract_features(self, obs, features_extractor):
+        """SB3 QNetwork와 같은 방식으로 feature extractor를 통과시킨다."""
+        return features_extractor(obs)
+
+    def forward(self, obs: torch.Tensor) -> torch.Tensor:
+        """Q(s,a)=V(s)+A(s,a)-mean_a A(s,a)를 계산한다."""
+        features = self.extract_features(obs, self.features_extractor)
+        value = self.value_net(features)
+        advantage = self.advantage_net(features)
+        return value + advantage - advantage.mean(dim=1, keepdim=True)
+
+    def set_training_mode(self, mode: bool) -> None:
+        """SB3 BasePolicy 인터페이스와 맞춘 training mode 설정."""
+        self.train(mode)
+
+
+class DuelingDQNPolicy(DQNPolicy):
+    """SB3 DQNPolicy의 Q-network만 Dueling 구조로 바꾼 정책 클래스."""
+
+    def make_q_net(self):
+        """online/target Q-network 생성 시 DuelingQNetwork를 사용한다."""
+        net_args = self._update_features_extractor(self.net_args, features_extractor=None)
+        return DuelingQNetwork(**net_args).to(self.device)
+
+
+class DQNRewardScaleWrapper(gym.Wrapper):
+    """DQN 학습 reward만 일정 비율로 줄이는 agent-local wrapper.
+
+    평가 환경에는 적용하지 않는다. 원본 reward 식과 평가 reward는 그대로 두고,
+    TD target의 scale만 낮춰 Q-learning 불안정을 줄이기 위한 용도다.
+    """
+
+    def __init__(self, env, scale: float = 1.0):
+        super().__init__(env)
+        self.scale = float(scale)
+
+    def __getattr__(self, name):
+        """wrapper에 없는 속성은 원본 env로 위임한다."""
+        return getattr(self.env, name)
+
+    def step(self, action):
+        """학습에 전달되는 reward만 scale한다."""
+        obs, reward, terminated, truncated, info = self.env.step(action)
+        info = dict(info)
+        info["raw_reward"] = float(reward)
+        info["dqn_reward_scale"] = self.scale
+        return obs, float(reward) * self.scale, terminated, truncated, info
 
 
 class TopKMaskableDQN(MaskableDQN):
@@ -180,14 +273,18 @@ def load_episodes(
     dates: list[str],
     district: str,
     processed_dir: str = "data/processed",
+    cache_dir: str | None = "data/episode_cache",
     progress_label: str | None = None,
 ) -> list:
     """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
-    date_iter = tqdm(dates, desc=progress_label, unit="day") if progress_label else dates
-    return [
-        load_episode(processed_dir, district=district, episode_start=f"{date} 00:00")
-        for date in date_iter
-    ]
+    return load_episodes_cached(
+        dates,
+        district,
+        processed_dir,
+        lambda root, gu, date: load_episode(root, district=gu, episode_start=f"{date} 00:00"),
+        cache_dir=cache_dir,
+        progress_label=progress_label,
+    )
 
 
 def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_eval: bool = False):
@@ -196,6 +293,9 @@ def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_ev
     env = maybe_wrap_future_demand(env, args)
     if not for_eval:
         env = maybe_wrap_agent_reward_shaping(env, args)
+        reward_scale = float(getattr(args, "dqn_reward_scale", 1.0) or 1.0)
+        if reward_scale != 1.0:
+            env = DQNRewardScaleWrapper(env, reward_scale)
     return maybe_wrap_candidate_actions(env, args)
 
 
@@ -302,6 +402,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DQN forecast/capacity comparison agent")
     parser.add_argument("--district", default="마포구")
     parser.add_argument("--processed-dir", default="data/processed")
+    parser.add_argument("--episode-cache-dir", default="data/episode_cache")
+    parser.add_argument("--no-episode-cache", action="store_true")
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--total-timesteps", type=int, default=50_000)
     parser.add_argument("--eval-every", type=int, default=10_000)
@@ -321,6 +423,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exploration-final-eps", type=float, default=0.05)
     parser.add_argument("--hidden", type=int, default=256)
     parser.add_argument("--double-q", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--dueling-q", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--dqn-reward-scale", type=float, default=1.0)
     parser.add_argument("--bc-epochs", type=int, default=0)
     parser.add_argument("--bc-dates", type=int, default=200)
     parser.add_argument("--bc-lr", type=float, default=1e-3)
@@ -357,6 +461,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--finetune-patience", type=int, default=0)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps"])
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument("--progress-update-steps", type=int, default=1_000)
     return parser.parse_args()
 
 
@@ -367,12 +472,14 @@ def main() -> None:
         TRAIN_DATES[: args.n_train_dates],
         args.district,
         args.processed_dir,
+        None if args.no_episode_cache else args.episode_cache_dir,
         f"DQN {args.district} load train" if args.progress else None,
     )
     eval_episodes = load_episodes(
         EVAL_DATES,
         args.district,
         args.processed_dir,
+        None if args.no_episode_cache else args.episode_cache_dir,
         f"DQN {args.district} load eval" if args.progress else None,
     )
     all_episodes = train_episodes + eval_episodes
@@ -398,7 +505,9 @@ def main() -> None:
     print(
         "dqn target: "
         f"double_q={args.double_q}, "
-        f"masked_target_q={args.masked_target_q and args.candidate_feature_mode == 'basic' and args.candidate_top_k > 0}"
+        f"dueling_q={args.dueling_q}, "
+        f"masked_target_q={args.masked_target_q and args.candidate_feature_mode == 'basic' and args.candidate_top_k > 0}, "
+        f"reward_scale={args.dqn_reward_scale}"
     )
     if capacity_stats:
         print(
@@ -413,8 +522,9 @@ def main() -> None:
         )
     print(f"heuristic mean reward: {heuristic_mean:.2f}")
 
+    policy_class = DuelingDQNPolicy if args.dueling_q else "MlpPolicy"
     model = TopKMaskableDQN(
-        "MlpPolicy",
+        policy_class,
         train_env,
         learning_rate=args.learning_rate,
         buffer_size=args.buffer_size,
@@ -473,11 +583,19 @@ def main() -> None:
         )
     try:
         while steps_done < args.total_timesteps:
-            chunk = min(args.eval_every, args.total_timesteps - steps_done)
+            next_eval_step = min(
+                ((steps_done // args.eval_every) + 1) * args.eval_every,
+                args.total_timesteps,
+            )
+            chunk = min(next_eval_step - steps_done, args.total_timesteps - steps_done)
+            if progress_bar is not None and args.progress_update_steps > 0:
+                chunk = min(chunk, args.progress_update_steps)
             model.learn(total_timesteps=chunk, reset_num_timesteps=False, progress_bar=False)
             steps_done += chunk
             if progress_bar is not None:
                 progress_bar.update(chunk)
+            if steps_done < next_eval_step and steps_done < args.total_timesteps:
+                continue
             eval_reward, eval_rewards = evaluate(model, eval_episodes, args, args.seed)
             history.append({"timesteps": steps_done, "eval_reward": eval_reward})
             if eval_reward > best_reward:
@@ -515,10 +633,12 @@ def main() -> None:
     if not history or abs(float(history[-1]["eval_reward"]) - final_mean) > 1e-9:
         history.append({"timesteps": steps_done, "eval_reward": final_mean, "stage": "final"})
     np.save(out_dir / "history.npy", np.asarray(history, dtype=object))
+    model.policy.load_state_dict(best_policy_state)
+    best_mean, best_rewards = evaluate(model, eval_episodes, args, args.seed)
 
     print(f"best reward: {best_reward:.2f} at timesteps {best_step}")
     print(f"final reward: {final_mean:.2f}")
-    print_eval_table("dqn_final", heuristic_rewards, final_rewards)
+    print_eval_table("dqn_best", heuristic_rewards, best_rewards)
 
 
 if __name__ == "__main__":

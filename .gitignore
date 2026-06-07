@@ -32,10 +32,15 @@ data/forecast_by_gu/
 
 # Logs / artifacts
 logs/
+data/episode_cache/
 *.log
 
 # Generated replay JSONs (학습 후 재생성, 파일 큼)
 docs/replay*.json
+docs/*_REINFORCE_*.json
+docs/*_A2C_*.json
+docs/*_PPO_*.json
+docs/*_DQN_*.json
 
 # Jupyter
 .ipynb_checkpoints/

@@ -47,6 +47,7 @@ from tqdm.auto import tqdm
 from src.agents.baselines import get_policy
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
+from src.agents.ours.common.episode_cache import load_episodes_cached
 from src.agents.ours.common.future_demand import build_history_net_profile, maybe_wrap_future_demand
 from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
 from src.envs.data_loader import load_episode
@@ -184,14 +185,18 @@ def load_episodes(
     dates: list[str],
     district: str,
     processed_dir: str = "data/processed",
+    cache_dir: str | None = "data/episode_cache",
     progress_label: str | None = None,
 ) -> list:
     """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
-    date_iter = tqdm(dates, desc=progress_label, unit="day") if progress_label else dates
-    return [
-        load_episode(processed_dir, district=district, episode_start=f"{date} 00:00")
-        for date in date_iter
-    ]
+    return load_episodes_cached(
+        dates,
+        district,
+        processed_dir,
+        lambda root, gu, date: load_episode(root, district=gu, episode_start=f"{date} 00:00"),
+        cache_dir=cache_dir,
+        progress_label=progress_label,
+    )
 
 
 def collect_trajectory(
@@ -477,6 +482,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="REINFORCE reward-to-go agent")
     parser.add_argument("--district", default="마포구")
     parser.add_argument("--processed-dir", default="data/processed")
+    parser.add_argument("--episode-cache-dir", default="data/episode_cache")
+    parser.add_argument("--no-episode-cache", action="store_true")
     parser.add_argument("--episodes", type=int, default=200)
     parser.add_argument("--max-num-steps", type=int, default=500)
     parser.add_argument("--n-train-dates", type=int, default=60)
@@ -552,12 +559,14 @@ def main() -> None:
         TRAIN_DATES[: args.n_train_dates],
         args.district,
         args.processed_dir,
+        None if args.no_episode_cache else args.episode_cache_dir,
         f"REINFORCE {args.district} load train" if args.progress else None,
     )
     eval_episodes = load_episodes(
         EVAL_DATES,
         args.district,
         args.processed_dir,
+        None if args.no_episode_cache else args.episode_cache_dir,
         f"REINFORCE {args.district} load eval" if args.progress else None,
     )
     all_episodes = train_episodes + eval_episodes
@@ -703,11 +712,17 @@ def main() -> None:
                         "best": f"{best_reward - heuristic_mean:+.1f}",
                     }
                 )
-            print(
+            message = (
                 f"episode={episode:4d} eval={eval_reward:8.2f} "
                 f"train={stats['return']:8.2f} policy_loss={stats['policy_loss']:7.3f} "
                 f"value_loss={stats['value_loss']:7.3f}"
             )
+            if progress_bar is not None:
+                progress_bar.clear()
+                tqdm.write(message)
+                progress_bar.refresh()
+            else:
+                print(message)
             if args.finetune_patience > 0 and patience_left <= 0:
                 print(f"fine-tuning early stop: best_episode={best_episode}, best_reward={best_reward:.2f}")
                 break
@@ -715,9 +730,12 @@ def main() -> None:
     final_mean, final_rewards = evaluate(policy, eval_episodes, args, device, args.seed)
     torch.save({"policy": policy.state_dict(), "value": value.state_dict()}, out_dir / "reinforce_final.pt")
     np.save(out_dir / "history.npy", np.asarray(history, dtype=object))
+    policy.load_state_dict(best_state["policy"])
+    value.load_state_dict(best_state["value"])
+    best_mean, best_rewards = evaluate(policy, eval_episodes, args, device, args.seed)
     print(f"best reward: {best_reward:.2f} at episode {best_episode}")
     print(f"final reward: {final_mean:.2f}")
-    print_eval_table("reinforce_final", heuristic_rewards, final_rewards)
+    print_eval_table("reinforce_best", heuristic_rewards, best_rewards)
 
 
 if __name__ == "__main__":

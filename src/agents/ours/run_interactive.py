@@ -10,6 +10,7 @@
     - capacity data: data/processed/station_capacity.csv
     - action 후보: forecast imbalance 기준 Top-K 12
     - BC 없음, rollback 없음
+    - 대표 평가는 Best checkpoint 기준
     - 진행률 표시: --progress 사용
 
 실행 예:
@@ -173,7 +174,18 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
         ]
     if args.algorithm == "dqn":
         # dqn_core의 기본값도 Double DQN이지만, 실행 로그에서 분명히 보이도록 명시한다.
-        cmd.append("--double-q")
+        cmd += [
+            "--double-q",
+            "--dueling-q",
+            "--dqn-reward-scale",
+            str(args.dqn_reward_scale),
+            "--exploration-initial-eps",
+            str(args.dqn_exploration_initial_eps),
+            "--exploration-fraction",
+            str(args.dqn_exploration_fraction),
+            "--exploration-final-eps",
+            str(args.dqn_exploration_final_eps),
+        ]
     if args.algorithm == "ppo":
         # Top-K rank action은 state마다 의미가 바뀌므로 PPO update를 보수적으로 제한한다.
         cmd += [
@@ -240,6 +252,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ppo-n-epochs", type=int, default=5)
     parser.add_argument("--ppo-n-steps", type=int, default=256)
     parser.add_argument("--ppo-batch-size", type=int, default=128)
+    parser.add_argument("--dqn-reward-scale", type=float, default=0.01)
+    parser.add_argument("--dqn-exploration-initial-eps", type=float, default=0.3)
+    parser.add_argument("--dqn-exploration-fraction", type=float, default=0.2)
+    parser.add_argument("--dqn-exploration-final-eps", type=float, default=0.02)
     parser.add_argument("--tag", default="interactive")
     parser.add_argument("--device", default="cpu", choices=["auto", "cpu", "mps"])
     parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=True)
@@ -256,25 +272,26 @@ def main() -> None:
         args.district = choose_district()
 
     districts = DISTRICTS if args.district.upper() == "ALL" else [args.district]
-    print(f"\n실행 알고리즘: {args.algorithm.upper()}")
-    print(f"실행 지역: {', '.join(districts)}")
+    print(f"\n실행 알고리즘: {args.algorithm.upper()}", flush=True)
+    print(f"실행 지역: {', '.join(districts)}", flush=True)
     if args.algorithm in {"reinforce", "a2c"}:
-        print(f"episodes={args.episodes}, eval_every={args.eval_every}, top_k={args.candidate_top_k}")
+        print(f"episodes={args.episodes}, eval_every={args.eval_every}, top_k={args.candidate_top_k}", flush=True)
     else:
         print(
             f"timesteps={args.total_timesteps}, "
             f"eval_every_timesteps={args.eval_every_timesteps}, "
-            f"top_k={args.candidate_top_k}"
+            f"top_k={args.candidate_top_k}",
+            flush=True,
         )
 
     for index, district in enumerate(districts, start=1):
-        print("\n" + "=" * 80)
-        print(f"[{index}/{len(districts)}] {district} 실행")
+        print("\n" + "=" * 80, flush=True)
+        print(f"[{index}/{len(districts)}] {district} 실행", flush=True)
         if not ensure_inputs(args, district):
             continue
         cmd = build_command(args, district)
-        print("명령:")
-        print(" ".join(cmd))
+        print("명령:", flush=True)
+        print(" ".join(cmd), flush=True)
         if args.dry_run:
             continue
         env = os.environ.copy()

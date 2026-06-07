@@ -36,6 +36,7 @@ from src.agents.baselines import get_policy
 from src.agents.ours.common.bc_utils import collect_bc_data
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
+from src.agents.ours.common.episode_cache import load_episodes_cached
 from src.agents.ours.common.future_demand import maybe_wrap_future_demand
 from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
 from src.envs.data_loader import load_episode
@@ -83,14 +84,18 @@ def load_episodes(
     dates: list[str],
     district: str,
     processed_dir: str = "data/processed",
+    cache_dir: str | None = "data/episode_cache",
     progress_label: str | None = None,
 ) -> list:
     """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
-    date_iter = tqdm(dates, desc=progress_label, unit="day") if progress_label else dates
-    return [
-        load_episode(processed_dir, district=district, episode_start=f"{date} 00:00")
-        for date in date_iter
-    ]
+    return load_episodes_cached(
+        dates,
+        district,
+        processed_dir,
+        lambda root, gu, date: load_episode(root, district=gu, episode_start=f"{date} 00:00"),
+        cache_dir=cache_dir,
+        progress_label=progress_label,
+    )
 
 
 def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_eval: bool = False):
@@ -202,6 +207,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="MaskablePPO bike rebalancing agent")
     parser.add_argument("--district", default="마포구")
     parser.add_argument("--processed-dir", default="data/processed")
+    parser.add_argument("--episode-cache-dir", default="data/episode_cache")
+    parser.add_argument("--no-episode-cache", action="store_true")
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--total-timesteps", type=int, default=50_000)
     parser.add_argument("--eval-every", type=int, default=10_000)
@@ -254,6 +261,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--finetune-patience", type=int, default=0)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps"])
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument("--progress-update-steps", type=int, default=1_000)
     return parser.parse_args()
 
 
@@ -264,12 +272,14 @@ def main() -> None:
         TRAIN_DATES[: args.n_train_dates],
         args.district,
         args.processed_dir,
+        None if args.no_episode_cache else args.episode_cache_dir,
         f"PPO {args.district} load train" if args.progress else None,
     )
     eval_episodes = load_episodes(
         EVAL_DATES,
         args.district,
         args.processed_dir,
+        None if args.no_episode_cache else args.episode_cache_dir,
         f"PPO {args.district} load eval" if args.progress else None,
     )
     all_episodes = train_episodes + eval_episodes
@@ -361,7 +371,13 @@ def main() -> None:
         )
     try:
         while steps_done < args.total_timesteps:
-            chunk = min(args.eval_every, args.total_timesteps - steps_done)
+            next_eval_step = min(
+                ((steps_done // args.eval_every) + 1) * args.eval_every,
+                args.total_timesteps,
+            )
+            chunk = min(next_eval_step - steps_done, args.total_timesteps - steps_done)
+            if progress_bar is not None and args.progress_update_steps > 0:
+                chunk = min(chunk, args.progress_update_steps)
             model.learn(
                 total_timesteps=chunk,
                 reset_num_timesteps=False,
@@ -371,6 +387,8 @@ def main() -> None:
             steps_done += chunk
             if progress_bar is not None:
                 progress_bar.update(chunk)
+            if steps_done < next_eval_step and steps_done < args.total_timesteps:
+                continue
             eval_reward, _ = evaluate(model, eval_episodes, args, args.seed)
             history.append({"timesteps": steps_done, "eval_reward": eval_reward})
             if eval_reward > best_reward:
@@ -408,10 +426,12 @@ def main() -> None:
     if not history or abs(float(history[-1]["eval_reward"]) - final_mean) > 1e-9:
         history.append({"timesteps": steps_done, "eval_reward": final_mean, "stage": "final"})
     np.save(out_dir / "history.npy", np.asarray(history, dtype=object))
+    model.policy.load_state_dict(best_policy_state)
+    best_mean, best_rewards = evaluate(model, eval_episodes, args, args.seed)
 
     print(f"best reward: {best_reward:.2f} at timesteps {best_step}")
     print(f"final reward: {final_mean:.2f}")
-    print_eval_table("ppo_final", heuristic_rewards, final_rewards)
+    print_eval_table("ppo_best", heuristic_rewards, best_rewards)
 
 
 if __name__ == "__main__":

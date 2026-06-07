@@ -1,78 +1,58 @@
-# 수요예측 기반 액션 후보 구조를 활용한 따릉이 재배치 강화학습
+# 수요예측 기반 Top-K 후보 구조를 활용한 서울 따릉이 재배치 강화학습
 
-**수요예측 feature와 후보 action 구조를 이용한 REINFORCE / A2C / Double DQN / PPO 비교 실험**
+**서울 25개 구 실험에서 A2C가 가장 안정적인 baseline 대비 개선을 보인 정책경사 비교**
 
-작성일: 2026-06-06
+작성일: 2026-06-07
 
 ---
 
 ## Abstract
 
-본 연구는 서울시 마포구 따릉이 정류소 재배치 문제를 **강화학습(Reinforcement Learning, RL)** 으로 해결할 수 있는지 검증하는 것을 목표로 한다. 초기 실험에서 **REINFORCE, A2C, DQN, PPO** 등 네 가지 알고리즘을 기본 환경에 그대로 적용하였으나, 단순 휴리스틱인 `MostImbalanced` baseline을 하회하는 결과를 보였다.
+본 연구는 서울 25개 구 따릉이 정류소 재배치 문제를 **강화학습(Reinforcement Learning, RL)** 으로 해결할 수 있는지 검증한다. 재배치 문제는 현재 재고뿐 아니라 앞으로 어느 정류소에서 대여와 반납이 집중될지에 영향을 받는다. 따라서 단순히 현재 가장 불균형한 정류소를 방문하는 규칙만으로는 선제적인 대응에 한계가 있다.
 
-이는 (1) 전체 146개 정류소를 대상으로 하는 큰 **action space**, (2) 행동의 효과가 즉각적인 reward로 연결되지 않는 **delayed reward** 구조, (3) 미래 수요 정보가 부족한 **state 표현**이 주된 원인으로 분석되었다.
+본 실험에서는 세 가지 설계를 적용했다. 첫째, 10분 단위 대여/반납 데이터를 이용해 구별 **1시간 수요예측 feature**를 만들고 상태(state)에 추가했다. 둘째, 전체 정류소 행동(action)을 직접 선택하는 대신 매 step마다 수요예측 기반 **Top-K 후보 정류소 12개**를 구성했다. 셋째, 서울 25개 구를 같은 평가 날짜와 같은 baseline 기준으로 비교해 지역별 성능 차이를 분석했다.
 
-이를 해결하기 위해 세 가지 개선을 적용하였다. 첫째, **1시간 수요예측(predicted net demand)** 을 state에 포함시켜 agent가 미래 수급 상황을 관측할 수 있도록 하였다. 둘째, 전체 정류소 중 점수 기반으로 선별한 **상위 12개 후보**로 action space를 축소하였다. 셋째, 일부 실험에서는 휴리스틱 행동을 모방하는 **Behavior Cloning(BC)** 사전 학습과 **best checkpoint rollback**을 적용하였다.
-
-결과적으로 **BC 없이도 REINFORCE, A2C, PPO가 baseline을 상회**했으며, DQN은 일반 안정화 no-BC 설정에서는 baseline을 넘지 못했지만 PBRS no-BC 설정에서 baseline을 초과하였다. 최신 full rerun 기준 no-BC 개선폭은 REINFORCE `+34.5`, A2C `+31.8`, PPO `+3.1`, DQN PBRS `+14.0`이다.
-
-BC 적용 실험에서는 REINFORCE, A2C, PPO가 BC 직후 대비 RL fine-tuning 이후 추가 개선을 보였다. DQN은 BC 직후 policy가 최고 성능으로 유지되어, RL 추가 개선보다는 BC policy 보존 효과로 해석된다.
+현재 보고서의 비교 알고리즘은 **REINFORCE with Value Baseline, A2C, PPO**이다. 모든 성능은 고정된 7개 평가일 평균 reward와 `MostImbalanced` baseline 대비 Delta로 평가했다. 결과적으로 **A2C가 평균 Best Delta +16.9, 평균 Final Delta +15.0로 가장 안정적**이었다. REINFORCE는 일부 구에서 큰 개선을 보였지만 분산이 컸고, PPO는 Best checkpoint 기준 가능성은 있으나 Final 안정성이 약했다.
 
 ---
 
 ## 1. 서론 (Introduction)
 
-공공 자전거 공유 시스템의 효율적 운영을 위해서는 **수요 불균형이 발생하는 정류소에 자전거를 선제적으로 재배치**하는 것이 중요하다. 서울시 따릉이의 경우 마포구에 146개 정류소가 포함되어 있으며, 재배치 트럭은 제한된 시간 안에 어느 정류소를 방문할지 결정해야 한다.
+공공 자전거 공유 시스템에서 재배치는 운영 품질을 좌우하는 핵심 문제다. 특정 정류소에 자전거가 부족하면 대여 실패가 발생하고, 특정 정류소가 가득 차면 반납 실패가 발생한다. 재배치 트럭은 제한된 시간 안에서 어느 정류소를 먼저 방문할지 순차적으로 결정해야 한다.
 
-기존의 규칙 기반 휴리스틱은 현재 재고 불균형을 즉시 해소하는 방향으로 작동하지만, 향후 수요 변화에 대한 선제적 대응이 어렵다.
+이 문제는 강화학습의 관점에서 자연스럽게 해석된다. 상태는 현재 재고, 시간, 트럭 상태, 예측 수요를 포함하고, 행동은 다음 방문 정류소 선택이며, 보상은 stockout/full과 이동 비용을 반영한 하루 누적 점수다.
 
-강화학습은 **누적 reward 최대화**라는 목적 아래 이러한 순차 의사결정 문제를 학습할 수 있는 프레임워크다. 그러나 실제 적용 시에는 **state 설계, reward 구조, action space 크기**가 학습 안정성에 큰 영향을 미친다.
+초기 실험에서 단순 RL agent는 강한 규칙 기반 baseline을 넘기 어려웠다. 주요 원인은 행동 공간(action space)이 크고, 보상(reward)이 하루 운영 결과로 늦게 반영되며, 현재 상태만으로는 미래 수요 집중을 충분히 볼 수 없다는 점이었다. 이에 따라 본 실험은 알고리즘만 바꾸는 방식이 아니라 **상태와 행동 구조를 학습 가능한 형태로 재구성**하는 방향으로 진행했다.
 
-본 연구의 주요 기여는 다음과 같다.
+본 연구의 기여는 다음과 같다.
 
-- **수요예측 기반 state 설계**: 1시간 예측 수요를 state에 포함함으로써 agent가 미래 부족/초과 위험을 볼 수 있게 하였다.
-- **후보 action space 축소**: 전체 정류소를 직접 선택하는 대신, 점수 기반 상위 12개 후보로 action space를 구조화하여 탐색 효율을 높였다.
-- **BC 효과의 분리 분석**: BC 직후 성능과 RL fine-tuning 이후 성능을 구분하여 RL 개선 여부를 독립적으로 평가하였다.
-- **4종 알고리즘 비교**: REINFORCE, A2C, Double DQN, PPO를 동일 평가 기준에서 비교하고, no-BC와 BC/guard 조건을 구분하였다.
+- **서울 25개 구 확장 실험**: 단일 구 중심 실험이 아니라 25개 구를 같은 방식으로 학습하고 평가했다.
+- **수요예측 기반 상태 설계**: 1시간 예측 대여/반납 정보를 상태에 포함했다.
+- **Top-K 행동 후보 구조**: 매 step마다 의미 있는 후보 정류소 12개를 만들고 그 안에서 policy가 선택하도록 했다.
+- **Best/Final 분리 평가**: 학습 중 최고 성능과 마지막 성능을 분리해 성능 가능성과 안정성을 함께 해석했다.
 
 ---
 
 ## 2. 관련 연구 (Related Work)
 
-### 2.1 공유 자전거 재배치 문제
+공유 자전거 재배치 문제는 vehicle routing, inventory rebalancing, demand forecasting이 결합된 동적 운영 문제로 연구되어 왔다. Liu et al.(2016)은 multi-source data를 이용해 정류소별 수요와 재고 목표를 함께 고려했고, TAGCN 계열 연구는 graph 구조와 시간 attention을 이용해 정류소별 대여/반납 수요를 예측했다.
 
-공유 자전거 재배치 문제는 정류소별 재고, 트럭 용량, 정류소 capacity, 이동 시간, 시간대별 수요가 함께 작용하는 동적 운영 문제다. 기존 연구에서는 이를 vehicle routing 또는 inventory rebalancing 문제로 보고, 정수계획법, 휴리스틱, 메타휴리스틱, 수요예측 결합 최적화 등으로 접근해 왔다. 예를 들어 KDD 2016의 multi-source data 기반 재배치 연구는 날씨, 교통, POI 등 다양한 데이터를 결합해 재배치 의사결정을 개선하려 했고, 최근 static bike rebalancing 연구들은 정류소 capacity와 수요 불확실성을 반영한 최적화 모델을 제안한다.
+강화학습 기반 재배치 연구에서는 dynamic vehicle routing problem과 bike rebalancing을 MDP로 정의하고, policy가 시간에 따라 다음 방문지 또는 dispatch action을 선택하도록 학습한다. 최근 연구들은 historical usage, weather, station attributes, demand forecast를 state에 넣는 방향을 사용한다.
 
-### 2.2 강화학습 기반 재배치 및 차량경로 문제
-
-강화학습은 동적 차량경로 문제(Dynamic Vehicle Routing Problem, DVRP)와 실시간 재배치 문제에서 점차 활용되고 있다. DVRP 연구들은 stochastic demand 또는 stochastic request time이 있는 상황에서 policy가 순차적으로 route 또는 dispatch action을 선택하도록 문제를 MDP로 정의한다. 공유 자전거 재배치에서도 spatio-temporal feature, multi-vehicle setting, PPO 또는 actor-critic 구조를 활용해 동적 수요에 대응하려는 연구가 제안되어 왔다.
-
-### 2.3 본 실험의 위치
-
-본 실험은 대규모 최적화 모델을 새로 설계하기보다, 기존 따릉이 시뮬레이션 환경에서 **RL agent가 학습 가능한 형태로 state와 action을 재구성**하는 데 초점을 둔다.
-
-특히 전체 정류소를 직접 선택하는 action space를 수요예측 기반 후보 12개로 줄이고, BC 직후 성능과 RL fine-tuning 이후 성능을 분리해 평가한다는 점에서 기존 휴리스틱 모방과 순수 RL 개선을 구분한다.
+본 실험은 이 흐름과 맞닿아 있다. 핵심은 복잡한 알고리즘을 추가하는 것보다, **agent가 볼 수 있는 상태에 미래 수요를 넣고**, **탐색해야 하는 행동 후보를 줄여 학습 신호를 선명하게 만드는 것**이다.
 
 ---
 
 ## 3. 용어 정리 (Terminology)
 
-보고서에서 사용하는 주요 용어는 다음과 같다. 복잡한 약어는 먼저 쉬운 의미로 해석한 뒤 실험 결과를 읽는 것이 좋다.
-
-| 용어 | 쉬운 설명 | 이 실험에서의 의미 |
-|---|---|---|
-| Baseline | 비교 기준 | `MostImbalanced` 휴리스틱 |
-| MostImbalanced | 가장 불균형한 곳으로 가는 규칙 | 현재 재고가 목표보다 너무 많거나 적은 정류소를 선택 |
-| Reward / Return | 하루 운행 점수 | 음수이며 0에 가까울수록 좋음 |
-| Delta | baseline보다 얼마나 나은지 | `model reward - baseline reward`, 양수면 baseline보다 좋음 |
-| State | agent가 보는 정보 | 현재 재고, 트럭 상태, 시간, 수요예측 등 |
-| Action | agent가 고르는 행동 | 다음에 이동할 정류소 또는 후보 순위 |
-| Top-K | 후보 줄이기 | 전체 146개 대신 좋은 후보 12개 중 선택 |
-| Forecast Top-K | 수요예측 후보 | 1시간 뒤 예상 부족/초과를 보고 후보를 만듦 |
-| Top-K Plus | 후보 고도화 | 수요예측 후보에 이동거리, 권역 penalty, 후보별 feature 추가 |
-| BC | 예습 | 휴리스틱 행동을 먼저 따라하게 하는 지도학습 |
-| Rollback | 되돌리기 | 평가가 나빠지면 가장 좋았던 모델로 복구 |
-| PBRS | 보조 reward | 학습 중에만 쓰는 potential-based reward shaping |
+| 용어 | 의미 |
+|---|---|
+| MostImbalanced | 현재 재고가 목표 재고에서 가장 많이 벗어난 정류소를 우선 방문하는 규칙 기반 baseline |
+| Reward | stockout, full, 이동거리 비용을 음수로 합산한 하루 점수. 0에 가까울수록 좋음 |
+| Delta | 모델 평가 reward - baseline reward. 양수이면 baseline보다 좋음 |
+| Best checkpoint | 학습 중 고정 평가일 평균 reward가 가장 좋았던 시점 |
+| Final checkpoint | 학습이 끝난 마지막 시점. Best와의 차이는 학습 안정성을 보여줌 |
+| Top-K action | 전체 정류소를 직접 고르지 않고 수요예측 점수 상위 12개 후보 중 선택하는 구조 |
 
 ---
 
@@ -80,23 +60,21 @@ BC 적용 실험에서는 REINFORCE, A2C, PPO가 BC 직후 대비 RL fine-tuning
 
 ### 4.1 환경 설정
 
-본 연구의 환경은 마포구 따릉이 정류소 재배치를 시뮬레이션하는 **다중 트럭 문제**로 정의된다. 실험 설정에서는 트럭 3대를 사용하였고, episode 하나는 하루 24시간을 10분 단위로 나눈 **144 time steps**로 구성된다.
+서울 25개 구를 각각 독립된 재배치 실험 단위로 두었다. episode 하나는 하루 운영을 의미하며, 10분 단위 대여/반납 데이터를 시간 순서대로 replay하면서 정류소 재고가 변한다. 재배치 agent는 매 decision step마다 다음 방문 정류소를 선택한다.
 
-각 decision step에서 현재 선택된 트럭은 다음 방문 정류소를 결정한다.
-
-공공 데이터에는 실시간 재고 스냅샷이 포함되어 있지 않으므로, 환경은 초기 재고를 설정한 후 10분 단위 대여/반납 기록을 시간 순서대로 replay하여 재고를 갱신한다.
+공공 데이터에는 실시간 재고 스냅샷이 충분히 포함되어 있지 않으므로, 환경은 초기 재고를 설정한 뒤 시간별 대여/반납 기록을 반영해 재고를 갱신한다.
 
 ### 4.2 State
 
 | 범주 | 구성 요소 |
 |---|---|
-| 정류소 재고 | 정류소별 현재 재고 비율 (`bikes / capacity`) |
-| 수요예측 | 정류소별 1시간 예측 순수요 (`pred_net_1h`), 예측 편차 (`projected_deviation`) |
+| 정류소 상태 | 현재 재고 비율, capacity, target 대비 편차 |
+| 수요예측 | 1시간 예측 대여량, 반납량, 순수요, 예측 재고 편차 |
 | 트럭 상태 | 현재 위치, 적재량, 이동 상태 |
-| 시간 정보 | 현재 time step, 시간대 |
-| 캘린더/날씨 | 주말 여부, 공휴일 여부, 공휴일 전날 여부 |
+| 시간 정보 | 10분 time step, 평가 날짜의 시간 흐름 |
+| 후보 feature | Top-K 후보별 점수, 거리 penalty, 권역 penalty |
 
-수요예측 feature는 다음과 같이 산출된다.
+수요예측 feature는 다음 식으로 사용된다.
 
 ```text
 pred_net_1h = pred_returns_1h - pred_rentals_1h
@@ -104,30 +82,22 @@ projected_bikes = current_bikes + pred_net_1h
 projected_deviation = (projected_bikes - target_bikes) / capacity
 ```
 
-`projected_deviation`이 음수이면 1시간 후 재고 부족이 예상됨을 의미하며, 양수이면 거치 공간 포화가 예상됨을 의미한다.
+`projected_deviation`이 음수이면 1시간 뒤 재고 부족 가능성이 크고, 양수이면 거치 공간 포화 가능성이 크다는 의미다.
 
 ### 4.3 Action
 
-기본 구조에서는 agent가 전체 146개 정류소 중 하나를 직접 선택한다. 개선된 구조에서는 점수 기반으로 선별된 상위 12개 후보 중 하나를 선택하도록 action space를 축소하였다.
-
-| 구조 | Action space 크기 | 설명 |
-|---|---:|---|
-| 기본 | 146 | 전체 정류소 중 직접 선택 |
-| Forecast Top-K | 12 | 수요예측 기반 후보 중 선택 |
-| Top-K Plus | 12 | 수요예측 + 이동거리 + 권역 penalty + 후보 feature 포함 |
-
-후보 점수는 예측 불균형에서 이동거리 penalty와 권역 외 penalty를 차감하여 산출한다.
+기본적으로 정류소 재배치 action은 "다음에 방문할 정류소 선택"이다. 하지만 구마다 정류소 수가 많기 때문에 전체 정류소를 직접 action으로 두면 탐색 공간이 커진다. 본 실험에서는 매 step마다 수요예측 기반 후보 12개를 생성하고, agent는 이 후보 중 하나를 선택한다.
 
 ```text
 candidate_score =
     forecast_imbalance
-  - distance_penalty
+  - candidate_travel_coef * travel_distance
   - zone_penalty
 ```
 
-### 4.4 Reward
+### 4.4 Reward와 평가 지표
 
-Reward는 운행 중 발생하는 서비스 실패와 이동 비용을 음수로 합산한 값이다. Reward가 0에 가까울수록 성능이 우수하다.
+Reward는 서비스 실패와 이동 비용을 음수로 합산한다. 따라서 reward는 **0에 가까울수록 좋다**.
 
 ```text
 r_t = -1.0 * stockout
@@ -136,58 +106,45 @@ r_t = -1.0 * stockout
       -0.002 * travel_step
 ```
 
-| 항목 | 정의 |
-|---|---|
-| `stockout` | 대여 요청이 있었으나 재고 부족으로 실패한 횟수 |
-| `full` | 반납 요청이 있었으나 거치 공간 포화로 실패한 횟수 |
-| `travel_km` | 이동 거리 |
-| `travel_step` | 이동 time step 수 |
+평가 지표는 고정된 7개 날짜에서 episode reward를 평균한 값이다. 서로 다른 구는 reward scale이 다르므로 raw reward보다 baseline 대비 Delta를 중심으로 해석한다.
 
-Episode 점수(Return)는 하루 전체 reward의 합산이며, 평가 지표는 고정된 7개 날짜에 대한 평균 Return이다.
+```text
+Delta = model_eval_reward - MostImbalanced_eval_reward
+```
 
 ### 4.5 Baseline: MostImbalanced
 
-`MostImbalanced`는 학습 없이 규칙만으로 동작하는 강한 휴리스틱 baseline이다. 목표 재고를 `capacity * target_fill_ratio`로 설정하고, 현재 목표 재고와의 편차가 가장 큰 정류소를 다음 방문지로 선택한다.
-
-- 트럭이 비어 있으면: 자전거가 목표 이상으로 많은 정류소로 이동하여 적재
-- 트럭이 가득 찼으면: 자전거가 목표 이하로 부족한 정류소로 이동하여 하역
-- 그 외: 현재 목표 편차가 가장 큰 정류소를 선택
-
-수정 환경 기준 baseline은 다음과 같다.
-
-```text
-MostImbalanced baseline = -448.3
-```
+`MostImbalanced`는 학습 없이 현재 목표 재고에서 가장 크게 벗어난 정류소를 방문하는 규칙 기반 정책이다. 현재 상태만으로도 강하게 작동하는 baseline이므로, 본 실험에서는 이 baseline을 넘는지 여부를 주요 기준으로 삼았다.
 
 ---
 
 ## 5. 방법론 (Methodology)
 
-### 5.1 수요예측 기반 State 확장
+### 5.1 데이터 구성과 수요예측
 
-기존 state는 현재 재고 중심으로 구성되어 있어, agent가 미래 수급 불균형을 사전에 파악하기 어려웠다. 재배치 문제의 특성상 "현재 부족한 정류소"보다 "곧 부족해질 정류소"를 선제적으로 방문하는 것이 더 효과적일 수 있다.
+서울 전체 전처리 데이터는 정류소 테이블과 10분 단위 대여/반납 테이블로 구성된다.
 
-이에 따라 1시간 수요예측 데이터(`demand_forecast_1h_rlholdout_seed42.parquet`)를 state에 포함시켰다. 이를 통해 agent는 현재 재고 편차뿐 아니라 1시간 후 예측 재고 편차를 함께 관측할 수 있다.
+| 데이터 | 현재 보고서 기준 |
+|---|---:|
+| 구 수 | 25 |
+| 분석 대상 정류소 수 | 3313 |
+| active 정류소 수 | 2808 |
+| 10분 대여/반납 row 수 | 40,565,021 |
+| 구별 forecast parquet | 25개 |
 
-### 5.2 후보 Action Space 축소
+수요예측 파일은 구별로 생성되며, 각 row는 특정 시각과 정류소의 1시간 예측 대여량, 반납량, 순수요를 담는다.
 
-146개 정류소를 대상으로 하는 직접 선택 구조는 학습 초기 탐색 공간을 지나치게 넓힌다. 대부분의 action이 학습 초기 단계에서 무의미한 선택이 되어 학습 신호가 희석된다.
+### 5.2 Top-K 후보 구조
 
-이 문제를 해결하기 위해 매 decision step마다 후보 집합을 사전 생성하고, agent는 해당 집합 내에서만 선택한다. 후보 생성은 수요예측 기반 점수 함수로 이루어지며, Top-K Plus 설정에서는 이동거리 및 권역 penalty를 추가한다.
+Top-K 구조는 agent가 정류소 전체를 무작위로 탐색하지 않도록 돕는다. 후보는 예측 불균형, 이동거리, 권역 penalty를 함께 고려해 만들어진다. policy network의 action index는 "정류소 ID"가 아니라 "현재 step의 후보 rank"를 의미한다.
 
-### 5.3 Behavior Cloning과 Checkpoint Rollback
+이 방식은 action space를 줄이는 장점이 있지만, 매 step마다 후보 목록이 바뀌므로 PPO처럼 policy 변화 안정성을 전제로 하는 알고리즘에는 추가 variance를 만들 수 있다.
 
-일부 실험에서는 `MostImbalanced` 휴리스틱의 행동을 teacher action으로 활용한 BC 사전 학습을 수행하였다. BC는 지도학습 방식으로 policy가 휴리스틱 행동을 모방하도록 초기화하는 역할을 한다.
+### 5.3 Best/Final Checkpoint 해석
 
-BC 이후 RL fine-tuning 단계에서 성능이 오히려 하락하는 경우를 방지하기 위해, 평가 지표가 악화될 경우 최고 성능 checkpoint로 자동 복원하는 rollback을 적용하였다.
+학습 중 주기적으로 고정 평가일을 다시 실행하고, 가장 좋은 평가 성능을 Best checkpoint로 저장한다. Final checkpoint는 학습 종료 시점이다.
 
-BC 적용 결과는 다음 기준으로 해석한다.
-
-| 조건 | 해석 |
-|---|---|
-| no-BC가 baseline 초과 | RL 자체가 유의미한 개선을 만든 증거 |
-| BC 직후보다 RL fine-tuning 후 개선 | BC 이후 RL이 추가 개선을 만든 증거 |
-| BC 직후가 최고이고 RL 후 개선 없음 | BC policy를 유지한 결과이며, RL 개선으로 주장하지 않음 |
+Best는 "해당 설정에서 도달 가능한 성능"을 보여주고, Final은 "학습이 안정적으로 유지되는지"를 보여준다. 두 값을 함께 봐야 RL fine-tuning 중 policy가 무너지는지 판단할 수 있다.
 
 ---
 
@@ -195,7 +152,7 @@ BC 적용 결과는 다음 기준으로 해석한다.
 
 ### 6.1 REINFORCE with Value Baseline
 
-REINFORCE는 episode 종료 후 실제 누적 보상(reward-to-go)을 이용하여 policy를 업데이트하는 Monte Carlo policy gradient 알고리즘이다. Value Network를 baseline으로 활용하여 gradient 분산을 감소시켰다.
+REINFORCE는 episode 종료 후 reward-to-go를 계산하여 policy를 업데이트하는 Monte Carlo policy gradient 알고리즘이다. Value network는 baseline으로 사용해 advantage의 분산을 줄인다.
 
 ```python
 returns = discounted_reward_to_go(rewards, gamma)
@@ -205,9 +162,9 @@ policy_loss = -(log_probs * advantages.detach()).mean()
 value_loss = mse_loss(value_net(states), returns)
 ```
 
-### 6.2 Advantage Actor-Critic (A2C)
+### 6.2 A2C
 
-A2C는 현재 reward와 다음 state value를 이용하여 advantage를 추정하는 actor-critic 알고리즘이다. REINFORCE보다 더 자주 업데이트할 수 있어 학습 신호를 빠르게 반영할 수 있다.
+A2C는 actor(policy)와 critic(value)을 함께 학습한다. TD target을 사용하므로 REINFORCE보다 더 자주 업데이트할 수 있고, 이번 실험에서는 가장 안정적인 평균 성능을 보였다.
 
 ```python
 target = reward + gamma * (1 - done) * value(next_state)
@@ -217,18 +174,9 @@ actor_loss = -(log_prob(action) * advantage.detach()).mean()
 critic_loss = mse_loss(value(state), target)
 ```
 
-### 6.3 Double DQN
+### 6.3 PPO
 
-DQN은 각 action의 Q값을 직접 학습하는 value-based 알고리즘이다. 본 실험에서는 Q값 과대추정 문제를 완화하기 위해 Double DQN을 기본으로 적용하였다. Double DQN은 action 선택과 Q값 평가를 각각 online network와 target network로 분리한다.
-
-```python
-next_action = online_q(next_state).argmax()
-target_q = target_q_network(next_state)[next_action]
-```
-
-### 6.4 Proximal Policy Optimization (PPO)
-
-PPO는 policy update 크기를 clipping을 통해 제한하는 policy gradient 알고리즘이다. 본 실험의 안정화 설정에서는 learning rate, clip range, target KL을 보수적으로 설정하여 급격한 policy 변화를 억제하였다.
+PPO는 policy가 한 번에 너무 크게 변하지 않도록 clipped objective를 사용한다. 본 실험에서는 action mask를 지원하는 MaskablePPO를 사용해 Top-K 후보 밖의 action은 선택되지 않도록 했다.
 
 ```text
 r_t(theta) = pi_theta(a_t | s_t) / pi_old(a_t | s_t)
@@ -242,216 +190,248 @@ L_clip = min(
 
 ## 7. 실험 설정 (Experimental Setup)
 
-### 7.1 데이터
-
-| 파일 | 행 수 | 기간/범위 | 정류소 수 |
-|---|---:|---|---:|
-| `stations.parquet` | 3,341 | 전체 정류소 마스터 | 전체 3,341 / 마포구 146 |
-| `trips.parquet` | 1,267,998 | 2025년 대여 이력 | 관측 정류소 122 |
-| `demand_10min.parquet` | 1,547,459 | 2025-01-01 ~ 2026-01-01 | 관측 정류소 122 |
-| `weather_10min.parquet` | 52,549 | 2025년 | 해당 없음 |
-| `demand_forecast_1h_rlholdout_seed42.parquet` | 6,413,662 | 2025-01-01 ~ 2026-01-01 | 관측 정류소 122 |
-
-마포구 action 대상은 146개 정류소이나, 실제 수요가 관측된 정류소는 122개이며 나머지는 수요값 0으로 처리된다. Trip 로그는 다음 규칙에 따라 10분 단위 수요 테이블로 변환하였다.
-
-```text
-대여 시각의 출발 정류소 -> rentals += 1
-반납 시각의 도착 정류소 -> returns += 1
-```
-
-### 7.2 학습 및 평가 설정
-
-| 항목 | 기준 |
+| 항목 | 값 |
 |---|---|
-| 학습 기간 | 2025년 날짜 중 seed 42 shuffle 후 train pool |
-| 최종 학습 날짜 | 200일 |
+| 범위 | 서울 25개 구 |
+| 학습 데이터 | 구별 train pool 200일 |
 | 평가 날짜 | 2025-03-25, 2025-04-18, 2025-05-17, 2025-07-01, 2025-07-06, 2025-07-09, 2025-08-21 |
-| 평가 지표 | 7일 평균 Return |
-| 비교 기준 | 동일 환경의 `MostImbalanced` |
+| 평가 지표 | 7개 평가일 평균 reward |
+| baseline | `MostImbalanced` |
+| 후보 action 수 | Top-K 12 |
+| 수요예측 horizon | 6개 10분 구간, 즉 1시간 |
+| candidate mode | `forecast_imbalance` |
+| travel penalty coefficient | 0.20 |
+| zone mode | `static3` |
+| BC 사용 여부 | 현재 결과는 no-BC |
+| rollback 사용 여부 | 현재 interactive full run은 rollback 없음 |
+| REINFORCE/A2C 학습량 | 500 episodes |
+| PPO 학습량 | 170,000 timesteps |
 
-| 알고리즘 | 학습량 |
-|---|---:|
-| REINFORCE | 500 episodes |
-| A2C | 500 episodes |
-| DQN | 170,000 timesteps |
-| PPO | 170,000 timesteps |
+### 7.1 주요 하이퍼파라미터
 
-`100K`, `170K`는 데이터 행 수가 아니라 환경과 상호작용한 step 수를 의미한다.
-
-본 보고서의 학습곡선은 supervised learning의 validation loss가 아니라, 학습 중 일정 간격으로 현재 policy를 고정 평가 날짜 7일에 실행한 **periodic evaluation return**이다.
-
-RL에서는 탐색 noise와 stochastic policy 때문에 학습 중 수집되는 return만으로 성능을 판단하기 어렵기 때문에, 별도 평가 episode를 주기적으로 실행해 평균 return을 확인하는 방식이 널리 사용된다. 따라서 본 곡선은 최종 성능 순위표라기보다, 학습 과정에서 성능이 안정적으로 개선되는지, BC 이후 RL fine-tuning이 policy를 개선하는지 또는 망가뜨리는지 확인하기 위한 **진단 그래프**이다.
+| 알고리즘 | 주요 설정 |
+|---|---|
+| REINFORCE | gamma=0.99, hidden=256, lr_policy=3e-4, lr_value=1e-3, normalize_advantages=True |
+| A2C | gamma=0.99, hidden=256, lr_policy=1e-4, lr_value=3e-4, batch_size=32, memory_size=200 |
+| PPO | gamma=0.99, gae_lambda=0.95, learning_rate=1e-4, clip_range=0.1, ent_coef=0.003, target_kl=0.03, n_steps=256, batch_size=128, n_epochs=5 |
 
 ---
 
 ## 8. 실험 결과 (Results)
 
-모든 결과는 `MostImbalanced` baseline(Return = `-448.3`)과의 차이로 비교한다. `Delta > 0`이면 baseline 대비 개선을 의미한다. 아래 수치는 2026-06-06 full rerun 결과를 반영한다.
+### 8.1 알고리즘별 전체 요약
 
-### 8.1 BC 없는 RL 단독 실험
+| Algorithm | 구 수 | Best 승리 구 | Final 승리 구 | Mean Best Δ | Median Best Δ | Mean Final Δ |
+|---|---:|---:|---:|---:|---:|---:|
+| A2C | 25.0 | 17.0 | 17.0 | 16.9 | 13.0 | 15.0 |
+| REINFORCE | 25.0 | 13.0 | 9.0 | -0.8 | 3.9 | -27.4 |
+| PPO | 25.0 | 13.0 | 10.0 | -3.5 | 3.9 | -35.7 |
 
-BC 없이 RL만으로 baseline을 상회한 경우, 강화학습 자체가 유의미한 개선을 만든 것으로 해석할 수 있다. 최신 재학습에서는 REINFORCE, A2C, PPO가 baseline을 넘었고, DQN은 일반 안정화 설정에서는 하회했지만 PBRS를 추가한 no-BC 설정에서 baseline을 넘었다.
+**A2C**는 Best와 Final 모두 평균적으로 가장 안정적이었다. **REINFORCE**는 일부 구에서 큰 개선을 만들었지만 평균 Final Delta가 낮아 학습 후반 안정성 문제가 있었다. **PPO**는 Best checkpoint에서는 baseline을 넘는 구가 있었지만 Final에서 하락하는 경우가 많았다.
 
-| 알고리즘 | 설정 | Best Return | Final Return | Delta | 해석 |
-|---|---|---:|---:|---:|---|
-| REINFORCE | Forecast Top-K | -413.8 | -453.0 | **+34.5** | no-BC 최고 성능, final은 하락 |
-| A2C | Forecast Top-K Plus | -416.5 | -416.5 | **+31.8** | 안정적인 actor-critic 결과 |
-| DQN | Forecast Top-K Plus 안정화 | -454.2 | -454.2 | -5.9 | baseline 하회, 안정화만으로는 부족 |
-| DQN | Forecast Top-K Plus + PBRS | -434.3 | -434.3 | **+14.0** | DQN no-BC 중 채택 가능한 설정 |
-| PPO | Forecast Top-K Plus 보수적 업데이트 | -445.2 | -445.2 | **+3.1** | 개선폭은 작지만 baseline 초과 |
+Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. 왼쪽 세 열은 알고리즘별 Best Delta이고, 오른쪽은 정류소 수, 전체 수요량, forecast coverage이다. 붉은 셀이 몰린 구는 baseline을 넘지 못한 구이며, 오른쪽 지표를 함께 보면 단순 알고리즘 문제인지, 수요 규모가 큰 구의 reward scale 문제인지, 예측 데이터 coverage가 낮은 문제인지 비교할 수 있다.
 
-![BC 없이 baseline을 넘은 핵심 결과](figures/easy_report_no_bc_delta.png)
+![구별 Best Delta와 데이터 특성 Scorecard](figures/current_algorithm_delta_distribution.png)
 
-### 8.2 BC 적용 실험
+### 8.2 학습곡선
 
-BC 적용 결과를 해석할 때는 BC 직후 성능과 RL fine-tuning 이후 성능을 반드시 구분해야 한다.
+아래 그림은 train reward가 아니라, 학습 중 주기적으로 고정 평가일을 다시 실행한 **주기적 평가 return**이다. 실선은 25개 구 평균 Delta, 점선은 중앙값, 음영은 IQR이다.
 
-| 알고리즘 | BC 직후 Return | Best Return | Delta | BC 이후 RL 개선 | 해석 |
-|---|---:|---:|---:|---:|---|
-| REINFORCE | -408.9 | -400.6 | **+47.6** | **+8.3** | BC 이후 RL 추가 개선 |
-| A2C | -415.3 | -403.8 | **+44.4** | **+11.4** | BC 이후 RL 추가 개선 |
-| DQN | -417.7 | -417.7 | +30.6 | +0.0 | BC policy 유지, RL 개선 주장 불가 |
-| PPO | -417.3 | -404.0 | **+44.3** | **+13.4** | BC 이후 RL 추가 개선 |
+![REINFORCE/A2C/PPO 학습곡선](figures/current_learning_curves.png)
 
-![BC 이후 RL fine-tuning 개선량](figures/easy_report_bc_finetune.png)
+학습곡선에서 A2C는 초반에 빠르게 baseline 근처까지 올라온 뒤 비교적 안정적으로 유지된다. REINFORCE는 후반 개선 구간이 있으나 구별 편차가 크다. PPO는 일부 구에서 강하게 개선되지만 Final로 갈수록 정책이 흔들리는 구가 있어 Best/Final 차이가 커진다.
 
-### 8.3 DQN / PPO 안정화 추가 실험
+### 8.3 Best 3 / Worst 3 구 분석
 
-안정화 설정을 포함한 DQN 및 PPO 실험 결과는 다음과 같다.
+| Algorithm | 구분 | 구 | 정류소 | Active | 수요량 | Baseline | Best | Final | Best Δ | Final Δ | Best step |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| A2C | Best | 강서구 | 232.0 | 201.0 | 9191249.0 | -3549.0 | -3499.1 | -3499.1 | 49.9 | 49.9 | 50.0 |
+| A2C | Best | 강남구 | 201.0 | 179.0 | 2526424.0 | -531.7 | -482.0 | -482.0 | 49.7 | 49.7 | 50.0 |
+| A2C | Best | 노원구 | 170.0 | 152.0 | 4424799.0 | -800.3 | -752.1 | -752.1 | 48.2 | 48.2 | 50.0 |
+| A2C | Worst | 서대문구 | 96.0 | 80.0 | 1318854.0 | -191.4 | -204.0 | -204.2 | -12.6 | -12.7 | 200.0 |
+| A2C | Worst | 은평구 | 118.0 | 98.0 | 1746039.0 | -241.8 | -257.3 | -257.3 | -15.5 | -15.5 | 50.0 |
+| A2C | Worst | 관악구 | 98.0 | 71.0 | 1432418.0 | -143.5 | -162.1 | -162.1 | -18.6 | -18.6 | 50.0 |
+| PPO | Best | 강서구 | 232.0 | 201.0 | 9191249.0 | -3549.0 | -3499.1 | -3668.7 | 49.9 | -119.6 | 40000.0 |
+| PPO | Best | 광진구 | 110.0 | 90.0 | 3553277.0 | -899.5 | -850.9 | -850.9 | 48.6 | 48.6 | 170000.0 |
+| PPO | Best | 노원구 | 170.0 | 152.0 | 4424799.0 | -800.3 | -752.1 | -752.1 | 48.2 | 48.2 | 20000.0 |
+| PPO | Worst | 영등포구 | 202.0 | 177.0 | 6793154.0 | -2440.1 | -2490.7 | -2602.1 | -50.6 | -162.0 | 40000.0 |
+| PPO | Worst | 마포구 | 146.0 | 122.0 | 3506436.0 | -760.2 | -814.2 | -894.6 | -54.0 | -134.4 | 140000.0 |
+| PPO | Worst | 양천구 | 128.0 | 111.0 | 4612053.0 | -1511.2 | -1679.9 | -1731.2 | -168.7 | -219.9 | 160000.0 |
+| REINFORCE | Best | 양천구 | 128.0 | 111.0 | 4612053.0 | -1511.2 | -1434.3 | -1652.9 | 76.9 | -141.7 | 50.0 |
+| REINFORCE | Best | 강남구 | 201.0 | 179.0 | 2526424.0 | -531.7 | -482.0 | -482.0 | 49.7 | 49.7 | 450.0 |
+| REINFORCE | Best | 광진구 | 110.0 | 90.0 | 3553277.0 | -899.5 | -851.9 | -851.9 | 47.6 | 47.6 | 200.0 |
+| REINFORCE | Worst | 강동구 | 140.0 | 123.0 | 3540785.0 | -662.9 | -711.4 | -711.4 | -48.5 | -48.5 | 350.0 |
+| REINFORCE | Worst | 마포구 | 146.0 | 122.0 | 3506436.0 | -760.2 | -815.2 | -826.3 | -54.9 | -66.1 | 300.0 |
+| REINFORCE | Worst | 강서구 | 232.0 | 201.0 | 9191249.0 | -3549.0 | -3706.5 | -3706.5 | -157.5 | -157.5 | 500.0 |
 
-| 설정 | Best Return | Delta | 비고 |
-|---|---:|---:|---|
-| DQN no-BC 안정화 | -454.2 | -5.9 | baseline 하회 |
-| DQN BC 유지 | -417.7 | +30.6 | 참고, RL 개선 아님 |
-| DQN PBRS no-BC | -434.3 | +14.0 | 채택 가능한 DQN no-BC 설정 |
-| PPO no-BC 보수적 | -445.2 | +3.1 | 채택 |
-| PPO BC + 보수적 | -404.0 | +44.3 | 보조 결과, BC 이후 RL 개선 있음 |
-| PPO PBRS no-BC | -475.3 | -27.0 | baseline 하회, 제외 |
+아래 그림은 알고리즘별 Best/Worst 3 구를 분리한 것이다. 각 박스는 하나의 구이며, 초록 배경은 Best 3, 붉은 배경은 Worst 3을 의미한다. 검은 점은 해당 구에서 가장 좋았던 평가 시점을 나타낸다.
 
-PBRS는 알고리즘별로 효과가 달랐다. DQN에서는 delayed reward를 완화해 baseline을 넘는 데 도움이 되었지만, PPO에서는 오히려 성능이 하락하였다. 따라서 PBRS는 일괄 적용할 설정이 아니라 알고리즘별 ablation으로 다루는 것이 타당하다.
+![A2C Best/Worst 3 구 학습곡선](figures/current_best_worst_learning_curves_a2c.png)
 
-![DQN/PPO 안정화 추가 실험](figures/easy_report_dqn_ppo_stability.png)
+![REINFORCE Best/Worst 3 구 학습곡선](figures/current_best_worst_learning_curves_reinforce.png)
 
-### 8.4 학습곡선 기반 안정성 분석
+![PPO Best/Worst 3 구 학습곡선](figures/current_best_worst_learning_curves_ppo.png)
 
-강화학습 실험에서는 최종 점수뿐 아니라 학습 중 reward가 어떻게 변하는지도 중요하다. 아래 그림은 알고리즘별 periodic evaluation return을 나타낸다. REINFORCE/A2C는 episode 단위로, DQN/PPO는 timestep 단위로 학습되므로 직접적인 sample efficiency 비교를 피하기 위해 각 run의 진행률을 0-100%로 정규화하였다.
+### 8.4 서울 지도 시각화
 
-![알고리즘별 periodic evaluation return 변화](figures/easy_report_learning_dynamics_normalized.png)
+아래 지도는 각 구에서 가장 좋은 알고리즘과 Best Delta를 표시한다. 점 크기는 구별 정류소 수에 비례하고, 색은 Best Delta의 크기를 나타낸다.
 
-이 그림은 다음 세 가지 질문을 확인하기 위한 보조 분석이다.
+![서울 25개 구별 최고 알고리즘 지도](figures/current_seoul_best_delta_map.png)
 
-| 질문 | 관찰 결과 | 해석 |
-|---|---|---|
-| BC 없이도 학습 신호가 있는가 | REINFORCE, A2C, PPO no-BC는 baseline 위 checkpoint를 만들었다. DQN은 PBRS no-BC에서 baseline을 넘었다 | 후보 action과 수요예측 state는 RL 단독 학습을 가능하게 하지만, DQN은 추가 reward 보조가 필요했다 |
-| BC 이후 RL fine-tuning이 추가 개선을 만드는가 | REINFORCE, A2C, PPO는 BC 시작점보다 더 좋은 checkpoint가 나타났다 | BC를 단순 복사가 아니라 좋은 초기 policy로 활용한 사례다 |
-| BC 이후 policy가 망가지는가 | DQN은 BC 직후가 최고였고 이후 평가가 하락해 early stop/rollback에 의존했다 | DQN + BC는 RL 개선이 아니라 BC policy 보존으로 해석해야 한다 |
+### 8.5 원인 분석용 Scatter
 
-따라서 이 학습곡선은 "어떤 알고리즘이 가장 빠르게 학습했는가"를 주장하기 위한 그림이 아니다. 핵심 목적은 no-BC에서도 학습 신호가 있는지, BC 이후 추가 개선이 있는지, 그리고 rollback이 필요한 알고리즘이 무엇인지 구분하는 것이다. 본 실험은 단일 seed 중심이므로, 논문식 통계 검증을 위해서는 향후 여러 seed 평균과 confidence interval을 추가해야 한다.
+수요 규모와 baseline 난이도를 함께 보면, 성능 차이가 단순히 알고리즘 차이만으로 설명되지 않는다는 점을 볼 수 있다. 수요량이 많고 baseline reward scale이 큰 구는 한 번의 잘못된 이동이 더 큰 reward 손실로 이어질 수 있다.
 
-### 8.5 결과 채택 기준 요약
-
-| 실험 설정 | 채택 여부 | 근거 |
-|---|---|---|
-| REINFORCE no-BC | 채택 | RL 단독으로 baseline 크게 초과 |
-| A2C no-BC | 채택 | RL 단독으로 baseline 크게 초과 |
-| DQN no-BC 안정화 | 제외 | 최신 full rerun에서 baseline 하회 |
-| DQN PBRS no-BC | 채택 | DQN no-BC 중 baseline 초과 |
-| PPO no-BC 보수적 | 채택 | 개선폭은 작으나 baseline 초과 |
-| REINFORCE + BC | 보조 결과로 채택 | BC 이후 RL 개선 확인 |
-| A2C + BC | 보조 결과로 채택 | BC 이후 RL 개선 확인 |
-| PPO + BC | 보조 결과로 채택 | BC 이후 RL 개선 확인 |
-| DQN + BC | 참고 결과 | RL 개선이 아닌 BC policy 유지 |
-| PPO PBRS no-BC | 제외 권장 | baseline 하회 |
+![Best/Worst 원인 분석 scatter](figures/current_best_worst_causal_scatter.png)
 
 ---
 
 ## 9. 논의 (Discussion)
 
-### 9.1 State와 Action 설계의 중요성
+### 9.1 지역별 편차의 의미
 
-본 실험 결과에서 가장 중요한 시사점은, **알고리즘 자체보다 state/action 구조 설계가 성능에 더 결정적인 영향을 미쳤다**는 점이다.
+구별 성능 차이는 세 가지 요인으로 해석할 수 있다.
 
-기본 환경에서 네 알고리즘 모두 baseline을 하회하였으나, 수요예측 feature 및 후보 action 구조를 적용한 이후 REINFORCE, A2C, PPO는 no-BC로 baseline을 초과하였다. DQN은 일반 안정화 설정만으로는 baseline을 넘지 못했지만, PBRS를 추가한 no-BC 설정에서는 baseline을 초과하였다.
+1. **수요의 시공간 집중도**: 특정 시간과 지역에 수요가 강하게 몰리면 Top-K 후보가 실제 문제 정류소를 잘 잡을 때 개선폭이 커진다.
+2. **baseline 난이도**: `MostImbalanced`가 이미 잘 작동하는 구에서는 RL이 추가로 개선할 여지가 작다.
+3. **reward scale**: 수요량이 큰 구는 stockout/full 실패 수가 커져 reward 절댓값도 커진다. 따라서 raw reward보다 baseline 대비 Delta가 더 공정하다.
 
-### 9.2 알고리즘별 특성
+### 9.2 알고리즘별 해석
 
-- **REINFORCE / A2C**: 후보 action 구조와 수요예측 feature가 적용되었을 때 BC 없이도 가장 큰 개선을 보였다.
-- **DQN**: Q값 학습이 큰 action space에서 불안정해지는 경향이 있었다. 일반 안정화 no-BC는 baseline을 넘지 못했지만, PBRS를 추가하면 no-BC에서도 baseline을 초과하였다.
-- **PPO**: 보수적 update 설정 없이는 성능이 흔들렸으나, 작은 learning rate와 target KL을 적용하면 baseline을 넘을 수 있었다.
+**A2C**는 평균 Best Δ와 Final Δ가 모두 가장 안정적이다. TD 기반 advantage를 사용하기 때문에 episode 전체 reward를 기다리는 REINFORCE보다 업데이트 신호가 빠르고, PPO보다 현재 Top-K rank action 구조에 덜 민감하게 작동한 것으로 해석된다.
 
-### 9.3 알고리즘 구조와 결과 해석
+**REINFORCE**는 일부 구에서 큰 개선을 만들지만 Final 안정성이 낮다. Monte Carlo return을 사용하기 때문에 reward 분산이 크고, 구별 수요 패턴에 따라 학습곡선의 흔들림이 커질 수 있다.
 
-최신 full rerun 결과는 같은 state/action 개선을 적용하더라도 알고리즘 구조에 따라 학습 안정성과 개선폭이 달라짐을 보여준다. REINFORCE와 A2C는 policy를 직접 업데이트하는 구조 덕분에 수요예측 feature와 후보 action 축소 효과를 비교적 잘 활용했으며, 각각 `+34.5`, `+31.8`의 no-BC 개선을 보였다. 반면 DQN은 action별 Q값을 추정하는 value-based 구조상 delayed reward에 더 민감하여 일반 안정화 no-BC에서는 baseline을 넘지 못했고, PBRS를 추가했을 때 `+14.0` 개선을 달성했다. PPO는 clipping 기반의 보수적 update로 안정성은 확보했지만, 본 설정에서는 개선폭이 `+3.1`로 제한적이었다.
+**PPO**는 clipping과 target KL을 사용하므로 일반적으로 안정적이라고 알려져 있지만, 이번 구조에서는 구별 편차가 컸다. Top-K rank 행동은 매 step마다 행동 index의 의미가 바뀌므로, PPO가 기대하는 완만한 policy update가 항상 좋은 방향으로 누적되지 않을 수 있다. 따라서 PPO는 Best checkpoint와 Final checkpoint를 반드시 함께 봐야 한다.
 
-### 9.4 BC 효과 해석
+### 9.3 연구 근거와 연결
 
-BC는 RL 탐색의 시작점을 개선하는 효과를 가지지만, 반드시 RL fine-tuning으로 이어지는 추가 개선이 확인되어야 **"BC + RL"을 의미 있는 접근**으로 평가할 수 있다.
+자전거 재배치 선행연구들은 station-level demand prediction, inventory target, spatial-temporal feature가 중요하다고 보고한다. 본 실험의 결과도 같은 방향이다. 단순히 RL 알고리즘을 적용하는 것만으로는 baseline을 넘기 어렵고, **미래 수요를 state에 넣고 action 후보를 재구성해야 학습 신호가 살아난다**.
 
-REINFORCE, A2C, PPO는 이 기준을 충족하였다. DQN은 BC 직후 policy가 최고였으므로 BC policy를 유지한 결과로 해석한다.
+### 9.4 한계
 
-### 9.5 한계 및 향후 연구
-
-본 연구는 다음과 같은 한계를 가진다.
-
-- **마포구 한정 평가**: 타 자치구나 전체 서울 범위로 일반화하려면 추가 검증이 필요하다.
-- **단일 seed 중심 실험**: 결과의 통계적 신뢰성을 높이기 위해 여러 seed 반복 실험이 필요하다.
-- **후보 집합 크기 K 고정**: 본 실험은 K=12를 사용했으며, K=6, 24 등 후보 수 변화에 대한 ablation이 필요하다.
-- **수요예측 모델 고도화**: 현재는 1시간 예측 feature를 사용했지만, 더 정교한 수요예측 모델을 적용할 여지가 있다.
-- **Reward 계수 분석**: `stockout`, `full`, 이동 비용 계수의 민감도 분석이 추가되면 해석력이 높아진다.
+현재 실험은 구별 독립 학습이다. 실제 서울 전체 운영에서는 구 경계를 넘는 이동, 트럭 배치 수, depot 위치, 실시간 재고 스냅샷이 함께 고려되어야 한다. 또한 현재 수요예측은 1시간 horizon에 초점을 두므로, 장기 수요 변화와 이벤트성 수요는 충분히 반영하지 못할 수 있다.
 
 ---
 
 ## 10. 결론 (Conclusion)
 
-본 연구는 마포구 따릉이 재배치 문제에 강화학습을 적용하는 과정에서 state/action 설계의 중요성을 실험적으로 확인하였다.
+현재 25개 구 결과에서 REINFORCE, A2C, PPO를 비교하면, **A2C가 가장 안정적인 선택**이다. REINFORCE는 개선 가능성은 크지만 구별 편차가 있고, PPO는 Best checkpoint 기준 가능성은 있으나 Final 안정성이 약하다.
 
-기본 환경에서는 어떤 알고리즘도 단순 휴리스틱 baseline을 넘기 어려웠으나, 1시간 수요예측 feature와 후보 action space 축소를 적용하였을 때 REINFORCE, A2C, PPO는 BC 없이도 baseline을 초과하였다. DQN은 일반 안정화 no-BC에서는 baseline을 넘지 못했지만, PBRS를 추가한 no-BC 설정에서 `+14.0` 개선을 달성하였다. 특히 REINFORCE(`+34.5`)와 A2C(`+31.8`)는 BC 없이도 큰 폭의 개선을 보였다.
+이 결과의 함의는 단순히 "어떤 알고리즘이 가장 좋은가"에서 끝나지 않는다. 향후 연구에서는 구별 독립 학습을 넘어 구 간 이동, 트럭 배치 수, depot 위치, 실시간 재고 스냅샷을 함께 반영해야 한다. 또한 Top-K 후보가 실패한 구에서는 후보 생성 점수와 수요예측 coverage를 함께 진단해야 한다.
 
-BC 적용 실험에서는 REINFORCE, A2C, PPO가 BC 이후 RL fine-tuning으로 추가 개선을 보였다. DQN은 BC 직후 policy가 최고였으므로 RL 개선보다는 BC policy 보존으로 해석한다. 따라서 BC의 효과를 평가할 때 BC 직후 성능과 RL fine-tuning 이후 성능을 반드시 구분하여 분석해야 한다.
-
-> 따릉이 재배치 문제에서는 단순히 RL 알고리즘을 교체하는 것보다, agent가 학습할 수 있도록 state와 action 구조를 재설계하는 것이 더 중요하였다. 그 결과, 후보 action 구조와 수요예측 feature를 적용했을 때 REINFORCE, A2C, PPO는 no-BC로 baseline을 넘었고, DQN은 PBRS 보조를 통해 no-BC baseline 초과 설정을 확보하였다.
+> 서울 따릉이 재배치 문제에서는 알고리즘 선택만큼 **상태와 행동 구조 설계**가 중요하다. 1시간 수요예측과 Top-K 후보 행동 구조는 RL이 baseline을 넘어설 수 있는 조건을 만들었고, 그 효과는 구별 수요 패턴과 baseline 난이도에 따라 다르게 나타났다.
 
 ---
 
 ## References
 
-1. Liu, J. et al. (2016). Rebalancing Bike Sharing Systems: A Multi-source Data Smart Optimization. *KDD*.
-2. Schuijbroek, J., Hampshire, R., & van Hoeve, W. (2017). Inventory rebalancing and vehicle routing in bike sharing systems. *European Journal of Operational Research*.
-3. Li, Y. et al. (2018). A Deep Reinforcement Learning Framework for Rebalancing Dockless Bike Sharing Systems. *AAAI*.
-4. Pan, L. et al. (2024). A Reinforcement Learning Approach for Dynamic Rebalancing in Bike-Sharing System. *arXiv:2402.03589*.
-5. Joe, W., & Lau, H. C. (2020). Deep Reinforcement Learning Approach to Solve Dynamic Vehicle Routing Problem with Stochastic Customers. *ICAPS*.
-6. Williams, R. J. (1992). Simple statistical gradient-following algorithms for connectionist reinforcement learning. *Machine Learning*, 8, 229-256.
-7. Mnih, V. et al. (2015). Human-level control through deep reinforcement learning. *Nature*, 518, 529-533.
-8. van Hasselt, H., Guez, A., & Silver, D. (2016). Deep Reinforcement Learning with Double Q-learning. *AAAI*.
-9. Schulman, J. et al. (2017). Proximal Policy Optimization Algorithms. *arXiv:1707.06347*.
-10. Sutton, R. S., & Barto, A. G. (2018). *Reinforcement Learning: An Introduction*.
-11. Henderson, P. et al. (2018). Deep Reinforcement Learning that Matters. *AAAI*. https://arxiv.org/abs/1709.06560
-12. Raffin, A. et al. Stable-Baselines3 Documentation: Reinforcement Learning Tips and Tricks. [Software documentation]. https://stable-baselines3.readthedocs.io/en/master/guide/rl_tips.html
+1. Liu, J. et al. (2016). Rebalancing Bike Sharing Systems: A Multi-source Data Smart Optimization. *KDD*. https://www.kdd.org/kdd2016/papers/files/rfp0553-liuAT3.pdf
+2. Chai, D. et al. (2021). TAGCN: Station-level demand prediction for bike-sharing system via a temporal attention graph convolution network. *Information Sciences*. https://www.sciencedirect.com/science/article/abs/pii/S0020025521001031
+3. Pan, L. et al. (2024). A Reinforcement Learning Approach for Dynamic Rebalancing in Bike-Sharing System. *arXiv:2402.03589*. https://arxiv.org/abs/2402.03589
+4. Betkier, I., & Dawid, W. (2025). Intelligent Rebalancing: Reinforcement Learning Agent for Optimal Bike-Sharing Distribution Powered by Historical Usage Data. *SSRN*. https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5258933
+5. Li, Y. et al. (2018). A Deep Reinforcement Learning Framework for Rebalancing Dockless Bike Sharing Systems. *AAAI*. https://ojs.aaai.org/index.php/AAAI/article/download/3940/3818
+6. Schulman, J. et al. (2017). Proximal Policy Optimization Algorithms. *arXiv:1707.06347*. https://arxiv.org/abs/1707.06347
+7. Williams, R. J. (1992). Simple statistical gradient-following algorithms for connectionist reinforcement learning. *Machine Learning*.
+8. Sutton, R. S., & Barto, A. G. (2018). *Reinforcement Learning: An Introduction*.
+9. Seoul administrative boundary GeoJSON. https://github.com/southkorea/seoul-maps
 
 ---
 
-## Appendix A. 주요 하이퍼파라미터
+## Appendix A. 전체 구별 결과
 
-| 항목 | REINFORCE | A2C | DQN 안정화 | PPO 보수적 |
-|---|---|---|---|---|
-| 할인율 `gamma` | 0.99 | 0.99 | 0.99 | 0.99 |
-| network hidden | 256, 256 | 256, 256 | 256, 256 | pi/vf 256, 256 |
-| policy learning rate | 3e-4 | 1e-4 | - | 5e-5(no-BC), 3e-5(BC) |
-| value learning rate | 1e-3 | 3e-4 | - | vf_coef 0.5 |
-| batch size | episode update | 32 | 256 | 256 |
-| BC epochs | 0 또는 20 | 0 또는 20 | 0 또는 10 | 0 또는 10 |
-| DQN n-step | - | - | 3 | - |
-| DQN replay buffer | - | - | 100,000 | - |
-| PPO clip range | - | - | - | 0.05 |
-| PPO target KL | - | - | - | 0.01 |
-| 후보 action 수 | 12 | 12 | 12 | 12 |
+| Algorithm | 구 | Baseline | Best | Final | Best Δ | Final Δ | Best step |
+|---|---|---:|---:|---:|---:|---:|---:|
+| A2C | 강서구 | -3549.0 | -3499.1 | -3499.1 | 49.9 | 49.9 | 50.0 |
+| A2C | 강남구 | -531.7 | -482.0 | -482.0 | 49.7 | 49.7 | 50.0 |
+| A2C | 노원구 | -800.3 | -752.1 | -752.1 | 48.2 | 48.2 | 50.0 |
+| A2C | 광진구 | -899.5 | -851.9 | -851.9 | 47.6 | 47.6 | 100.0 |
+| A2C | 구로구 | -847.1 | -800.9 | -800.9 | 46.1 | 46.1 | 50.0 |
+| A2C | 송파구 | -1988.4 | -1943.3 | -1943.3 | 45.1 | 45.1 | 50.0 |
+| A2C | 마포구 | -760.2 | -716.5 | -716.5 | 43.8 | 43.8 | 50.0 |
+| A2C | 동대문구 | -473.8 | -441.6 | -441.6 | 32.3 | 32.3 | 50.0 |
+| A2C | 중랑구 | -301.3 | -272.6 | -272.6 | 28.7 | 28.7 | 100.0 |
+| A2C | 서초구 | -288.8 | -263.8 | -285.4 | 25.1 | 3.5 | 50.0 |
+| A2C | 강동구 | -662.9 | -639.9 | -639.9 | 23.0 | 23.0 | 50.0 |
+| A2C | 성동구 | -863.7 | -840.8 | -840.8 | 22.9 | 22.9 | 50.0 |
+| A2C | 양천구 | -1511.2 | -1498.2 | -1498.2 | 13.0 | 13.0 | 200.0 |
+| A2C | 동작구 | -174.0 | -165.5 | -165.5 | 8.5 | 8.5 | 150.0 |
+| A2C | 중구 | -244.3 | -239.4 | -239.4 | 4.9 | 4.9 | 100.0 |
+| A2C | 금천구 | -357.1 | -352.3 | -352.5 | 4.8 | 4.6 | 100.0 |
+| A2C | 종로구 | -371.9 | -368.0 | -368.0 | 3.9 | 3.9 | 50.0 |
+| A2C | 용산구 | -104.4 | -106.5 | -106.5 | -2.1 | -2.1 | 50.0 |
+| A2C | 강북구 | -35.2 | -39.2 | -39.2 | -4.0 | -4.0 | 50.0 |
+| A2C | 성북구 | -154.3 | -160.5 | -160.5 | -6.2 | -6.2 | 50.0 |
+| A2C | 영등포구 | -2440.1 | -2447.8 | -2471.7 | -7.7 | -31.6 | 100.0 |
+| A2C | 도봉구 | -124.9 | -134.3 | -134.3 | -9.4 | -9.4 | 50.0 |
+| A2C | 서대문구 | -191.4 | -204.0 | -204.2 | -12.6 | -12.7 | 200.0 |
+| A2C | 은평구 | -241.8 | -257.3 | -257.3 | -15.5 | -15.5 | 50.0 |
+| A2C | 관악구 | -143.5 | -162.1 | -162.1 | -18.6 | -18.6 | 50.0 |
+| PPO | 강서구 | -3549.0 | -3499.1 | -3668.7 | 49.9 | -119.6 | 40000.0 |
+| PPO | 광진구 | -899.5 | -850.9 | -850.9 | 48.6 | 48.6 | 170000.0 |
+| PPO | 노원구 | -800.3 | -752.1 | -752.1 | 48.2 | 48.2 | 20000.0 |
+| PPO | 동대문구 | -473.8 | -441.6 | -441.6 | 32.3 | 32.3 | 80000.0 |
+| PPO | 중랑구 | -301.3 | -272.6 | -272.6 | 28.7 | 28.7 | 100000.0 |
+| PPO | 강남구 | -531.7 | -508.3 | -508.3 | 23.4 | 23.4 | 170000.0 |
+| PPO | 성동구 | -863.7 | -840.4 | -840.8 | 23.3 | 22.9 | 140000.0 |
+| PPO | 강동구 | -662.9 | -639.9 | -639.9 | 23.0 | 23.0 | 160000.0 |
+| PPO | 서초구 | -288.8 | -270.9 | -270.9 | 17.9 | 17.9 | 170000.0 |
+| PPO | 동작구 | -174.0 | -165.5 | -172.8 | 8.5 | 1.2 | 40000.0 |
+| PPO | 금천구 | -357.1 | -351.4 | -387.9 | 5.6 | -30.9 | 140000.0 |
+| PPO | 중구 | -244.3 | -239.4 | -239.4 | 4.9 | 4.9 | 170000.0 |
+| PPO | 종로구 | -371.9 | -368.0 | -395.1 | 3.9 | -23.2 | 120000.0 |
+| PPO | 용산구 | -104.4 | -106.5 | -106.5 | -2.1 | -2.1 | 60000.0 |
+| PPO | 강북구 | -35.2 | -39.2 | -43.4 | -3.9 | -8.2 | 20000.0 |
+| PPO | 성북구 | -154.3 | -160.5 | -211.0 | -6.2 | -56.7 | 20000.0 |
+| PPO | 도봉구 | -124.9 | -134.3 | -136.2 | -9.4 | -11.2 | 60000.0 |
+| PPO | 은평구 | -241.8 | -257.3 | -257.3 | -15.5 | -15.5 | 160000.0 |
+| PPO | 송파구 | -1988.4 | -2004.7 | -2201.8 | -16.3 | -213.3 | 20000.0 |
+| PPO | 관악구 | -143.5 | -162.1 | -162.1 | -18.6 | -18.6 | 20000.0 |
+| PPO | 서대문구 | -191.4 | -211.1 | -224.0 | -19.7 | -32.6 | 80000.0 |
+| PPO | 구로구 | -847.1 | -888.0 | -941.1 | -40.9 | -94.0 | 120000.0 |
+| PPO | 영등포구 | -2440.1 | -2490.7 | -2602.1 | -50.6 | -162.0 | 40000.0 |
+| PPO | 마포구 | -760.2 | -814.2 | -894.6 | -54.0 | -134.4 | 140000.0 |
+| PPO | 양천구 | -1511.2 | -1679.9 | -1731.2 | -168.7 | -219.9 | 160000.0 |
+| REINFORCE | 양천구 | -1511.2 | -1434.3 | -1652.9 | 76.9 | -141.7 | 50.0 |
+| REINFORCE | 강남구 | -531.7 | -482.0 | -482.0 | 49.7 | 49.7 | 450.0 |
+| REINFORCE | 광진구 | -899.5 | -851.9 | -851.9 | 47.6 | 47.6 | 200.0 |
+| REINFORCE | 송파구 | -1988.4 | -1943.3 | -1943.3 | 45.1 | 45.1 | 50.0 |
+| REINFORCE | 동대문구 | -473.8 | -441.6 | -441.6 | 32.3 | 32.3 | 100.0 |
+| REINFORCE | 중랑구 | -301.3 | -272.6 | -297.0 | 28.7 | 4.3 | 50.0 |
+| REINFORCE | 노원구 | -800.3 | -773.4 | -957.9 | 26.9 | -157.6 | 150.0 |
+| REINFORCE | 서초구 | -288.8 | -263.8 | -263.8 | 25.1 | 25.1 | 250.0 |
+| REINFORCE | 성동구 | -863.7 | -840.8 | -905.6 | 22.9 | -41.9 | 50.0 |
+| REINFORCE | 중구 | -244.3 | -239.4 | -239.4 | 4.9 | 4.9 | 500.0 |
+| REINFORCE | 금천구 | -357.1 | -352.5 | -391.6 | 4.6 | -34.5 | 450.0 |
+| REINFORCE | 구로구 | -847.1 | -843.2 | -843.2 | 3.9 | 3.9 | 400.0 |
+| REINFORCE | 종로구 | -371.9 | -368.0 | -368.0 | 3.9 | 3.9 | 200.0 |
+| REINFORCE | 용산구 | -104.4 | -106.5 | -106.5 | -2.1 | -2.1 | 400.0 |
+| REINFORCE | 강북구 | -35.2 | -39.2 | -39.2 | -4.0 | -4.0 | 100.0 |
+| REINFORCE | 성북구 | -154.3 | -160.5 | -160.5 | -6.2 | -6.2 | 150.0 |
+| REINFORCE | 영등포구 | -2440.1 | -2447.8 | -2571.6 | -7.7 | -131.5 | 150.0 |
+| REINFORCE | 동작구 | -174.0 | -183.0 | -183.0 | -9.1 | -9.1 | 500.0 |
+| REINFORCE | 서대문구 | -191.4 | -203.9 | -204.2 | -12.5 | -12.7 | 150.0 |
+| REINFORCE | 관악구 | -143.5 | -162.1 | -162.1 | -18.6 | -18.6 | 250.0 |
+| REINFORCE | 도봉구 | -124.9 | -157.8 | -157.8 | -32.8 | -32.8 | 500.0 |
+| REINFORCE | 은평구 | -241.8 | -279.3 | -279.3 | -37.5 | -37.5 | 450.0 |
+| REINFORCE | 강동구 | -662.9 | -711.4 | -711.4 | -48.5 | -48.5 | 350.0 |
+| REINFORCE | 마포구 | -760.2 | -815.2 | -826.3 | -54.9 | -66.1 | 300.0 |
+| REINFORCE | 강서구 | -3549.0 | -3706.5 | -3706.5 | -157.5 | -157.5 | 500.0 |
 
----
+## Appendix B. 재현용 주요 실행 설정
 
-## Appendix B. 권장 추가 실험
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+```
 
-1. **다수 seed 반복 실험**: 평균과 표준편차를 제시하여 결과 신뢰성을 높인다.
-2. **K 값 ablation**: K=6, 12, 24를 비교하여 후보 action 수의 영향을 확인한다.
-3. **State ablation**: 수요예측 feature, 이동거리 penalty, 권역 penalty를 하나씩 제거해 기여도를 분리한다.
-4. **PPO no-BC 추가 튜닝**: PPO no-BC 개선폭이 작으므로 learning rate, clip range, entropy 계수를 추가 탐색한다.
-5. **DQN 안정성 분석**: DQN은 일반 안정화 no-BC에서는 baseline을 넘지 못하고 PBRS에서 개선되었으므로, replay buffer, exploration schedule, PBRS 계수의 추가 분석이 필요하다.
+interactive runner에서 알고리즘과 구를 선택하면 다음 공통 설정이 적용된다.
+
+- `processed_dir = data/processed_seoul_all`
+- `forecast_dir = data/forecast_by_gu`
+- `capacity_path = data/processed/station_capacity.csv`
+- `future_mode = forecast_projected_travel`
+- `candidate_top_k = 12`
+- `candidate_mode = forecast_imbalance`
+- `candidate_travel_coef = 0.20`
+- `candidate_zone_mode = static3`
+- `bc_epochs = 0`

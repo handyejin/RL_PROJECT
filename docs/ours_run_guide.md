@@ -8,7 +8,7 @@
 |---|---|
 | REINFORCE | Reward-to-Go와 Value Network baseline을 사용하는 policy gradient |
 | A2C | Actor-Critic 구조, `r + gamma V(s') - V(s)` advantage 사용 |
-| DQN | action mask를 적용한 Double DQN |
+| DQN | action mask를 적용한 Double DQN + Dueling Q 안정화 옵션 |
 | PPO | action mask를 적용한 MaskablePPO |
 
 ## 1. 실험에서 사용하는 데이터
@@ -116,7 +116,17 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
   --progress
 ```
 
-DQN은 timestep 기준으로 실행한다. 기본값은 Double DQN이다.
+DQN은 timestep 기준으로 실행한다. wrapper에서는 다른 알고리즘의 학습 방식은 바꾸지 않고, DQN에만 다음 안정화 옵션을 적용한다.
+
+| 옵션 | 기본값 | 의미 |
+|---|---:|---|
+| `--double-q` | on | target overestimation 완화 |
+| `--dueling-q` | on | `Q(s,a)=V(s)+A(s,a)-mean(A)` 구조 사용 |
+| `--dqn-reward-scale` | `0.01` | 학습 TD target scale만 축소, 평가 reward는 원본 유지 |
+| `--dqn-exploration-initial-eps` | `0.3` | Top-K 후보 구조에 맞춰 초기 랜덤 탐색 완화 |
+| `--dqn-exploration-final-eps` | `0.02` | 후반 랜덤 탐색 완화 |
+
+rollback과 early stopping은 사용하지 않는다. 학습은 끝까지 진행하고, 대표 성능은 저장된 Best checkpoint로 평가한다.
 
 ```bash
 PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
@@ -175,6 +185,15 @@ REINFORCE/A2C는 episode 기준, DQN/PPO는 timestep 기준으로 표시된다.
 | `delta` | `eval - base`, 0보다 크면 baseline보다 좋음 |
 | `best` | 지금까지 가장 좋은 baseline 대비 delta |
 
+학습 마지막에 출력되는 날짜별 평가표는 모든 알고리즘에서 **Best checkpoint** 기준으로 통일했다.
+
+```text
+best reward: 학습 중 평가 reward가 가장 좋았던 checkpoint
+final reward: 마지막 학습 step/episode의 checkpoint
+```
+
+따라서 메인 성능 비교는 `*_best` 표를 사용하고, `final reward`는 학습 후반 안정성을 해석할 때 함께 본다. 이 방식은 REINFORCE/A2C/PPO/DQN 모두 동일하다.
+
 예:
 
 ```text
@@ -182,7 +201,26 @@ A2C 영등포구: 50/500 [eval=-2390.2, base=-2440.1, delta=+49.9, best=+49.9]
 DQN 영등포구: 20000/170000 [eval=-2393.2, base=-2440.1, delta=+46.9, best=+46.9]
 ```
 
-## 6. Baseline 해석
+## 6. Episode Cache
+
+구별 episode 로딩은 기본적으로 `data/episode_cache/`에 cache된다.
+
+첫 실행은 parquet에서 episode를 만들기 때문에 기존과 비슷하게 걸리지만, 같은 구/날짜/전처리 경로로 다시 실행하면 cache를 바로 읽는다.
+
+```text
+DQN 금천구 load train cache: hit=200, miss=0, dir=data/episode_cache
+DQN 금천구 load eval cache: hit=7, miss=0, dir=data/episode_cache
+```
+
+cache는 순수 episode만 저장한다. capacity와 forecast는 기존처럼 cache 로딩 후 다시 적용되므로 수요예측 파일을 바꿔도 episode cache를 재사용할 수 있다.
+
+cache를 끄고 싶으면 다음 옵션을 붙인다.
+
+```bash
+--no-episode-cache
+```
+
+## 7. Baseline 해석
 
 Reward는 구마다 scale이 다르다.
 
@@ -198,7 +236,7 @@ Delta = Model Reward - MostImbalanced Baseline Reward
 | `= 0` | baseline과 비슷함 |
 | `< 0` | 모델이 baseline보다 나쁨 |
 
-## 7. 결과 파일
+## 8. 결과 파일
 
 학습 결과는 `logs/` 아래에 저장된다.
 
@@ -229,7 +267,7 @@ docs/gu_a2c_topk_no_bc_2026-06-06_summary.csv
 docs/gu_a2c_topk_no_bc_2026-06-06_summary.md
 ```
 
-## 8. 빠른 테스트
+## 9. 빠른 테스트
 
 PR 전 간단히 실행만 확인하려면 episode를 작게 줄인다.
 
@@ -242,7 +280,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
   --progress
 ```
 
-## 9. 주의사항
+## 10. 주의사항
 
 - `data/processed_seoul_all/`와 `data/forecast_by_gu/`는 용량이 커서 git에 올리지 않는다.
 - 수요예측 파일이 없으면 `run_interactive.py`가 어떤 파일이 없는지 알려준다.
