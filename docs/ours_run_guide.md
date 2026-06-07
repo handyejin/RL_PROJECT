@@ -127,7 +127,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
   --progress
 ```
 
-PPO도 timestep 기준으로 실행한다. PPO는 기본적으로 안정화 preset을 사용한다.
+PPO도 timestep 기준으로 실행한다. 기본 설정은 Top-K action 후보에서 정책이 너무 크게 흔들리지 않도록 보수적인 update 값을 사용한다.
 
 ```bash
 PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
@@ -138,19 +138,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
   --progress
 ```
 
-기존 기본 PPO 설정과 비교하고 싶으면 `--ppo-preset default`를 명시한다.
-
-```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
-  --algorithm ppo \
-  --district 영등포구 \
-  --ppo-preset default \
-  --total-timesteps 170000 \
-  --eval-every-timesteps 20000 \
-  --progress
-```
-
-PPO 기본 안정화 preset은 다음 update 제한을 적용한다.
+PPO 기본 하이퍼파라미터는 다음과 같다.
 
 | 옵션 | 값 | 의미 |
 |---|---:|---|

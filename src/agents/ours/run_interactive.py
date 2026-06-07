@@ -117,11 +117,7 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
     forecast_path = project_path(args.forecast_dir) / f"demand_forecast_1h_{district}.parquet"
     processed_dir = project_path(args.processed_dir)
     capacity_path = project_path(args.capacity_path)
-    tag_parts = [args.tag, args.algorithm]
-    if args.algorithm == "ppo" and args.ppo_preset != "default":
-        tag_parts.append(args.ppo_preset)
-    tag_parts.append(district)
-    tag = "_".join(tag_parts)
+    tag = "_".join([args.tag, args.algorithm, district])
 
     cmd = [
         sys.executable,
@@ -178,7 +174,7 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
     if args.algorithm == "dqn":
         # dqn_core의 기본값도 Double DQN이지만, 실행 로그에서 분명히 보이도록 명시한다.
         cmd.append("--double-q")
-    if args.algorithm == "ppo" and args.ppo_preset == "stable":
+    if args.algorithm == "ppo":
         # Top-K rank action은 state마다 의미가 바뀌므로 PPO update를 보수적으로 제한한다.
         cmd += [
             "--learning-rate",
@@ -237,7 +233,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-every-timesteps", type=int, default=20_000)
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--candidate-top-k", type=int, default=12)
-    parser.add_argument("--ppo-preset", choices=["stable", "default"], default="stable")
     parser.add_argument("--ppo-learning-rate", type=float, default=1e-4)
     parser.add_argument("--ppo-ent-coef", type=float, default=0.003)
     parser.add_argument("--ppo-target-kl", type=float, default=0.03)
@@ -271,8 +266,6 @@ def main() -> None:
             f"eval_every_timesteps={args.eval_every_timesteps}, "
             f"top_k={args.candidate_top_k}"
         )
-        if args.algorithm == "ppo":
-            print(f"ppo_preset={args.ppo_preset}")
 
     for index, district in enumerate(districts, start=1):
         print("\n" + "=" * 80)
