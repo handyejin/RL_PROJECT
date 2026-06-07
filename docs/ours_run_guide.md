@@ -138,6 +138,29 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
   --progress
 ```
 
+PPO가 후반에 흔들리면 안정화 preset을 사용한다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+  --algorithm ppo \
+  --district 영등포구 \
+  --ppo-preset stable \
+  --total-timesteps 170000 \
+  --eval-every-timesteps 20000 \
+  --progress
+```
+
+안정화 preset은 다음 PPO update 제한을 적용한다.
+
+| 옵션 | 값 | 의미 |
+|---|---:|---|
+| `learning_rate` | `1e-4` | policy update 크기 완화 |
+| `ent_coef` | `0.003` | 후반 탐색 강도 감소 |
+| `target_kl` | `0.03` | policy가 너무 멀리 바뀌면 update 중단 |
+| `clip_range` | `0.1` | PPO clipping 범위 축소 |
+| `n_epochs` | `5` | 같은 rollout 반복 학습 감소 |
+| `n_steps` | `256` | 더 짧은 rollout 단위 |
+
 25개 구 전체를 순차 실행하려면:
 
 ```bash

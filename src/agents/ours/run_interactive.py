@@ -117,7 +117,11 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
     forecast_path = project_path(args.forecast_dir) / f"demand_forecast_1h_{district}.parquet"
     processed_dir = project_path(args.processed_dir)
     capacity_path = project_path(args.capacity_path)
-    tag = f"{args.tag}_{args.algorithm}_{district}"
+    tag_parts = [args.tag, args.algorithm]
+    if args.algorithm == "ppo" and args.ppo_preset != "default":
+        tag_parts.append(args.ppo_preset)
+    tag_parts.append(district)
+    tag = "_".join(tag_parts)
 
     cmd = [
         sys.executable,
@@ -174,6 +178,24 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
     if args.algorithm == "dqn":
         # dqn_core의 기본값도 Double DQN이지만, 실행 로그에서 분명히 보이도록 명시한다.
         cmd.append("--double-q")
+    if args.algorithm == "ppo" and args.ppo_preset == "stable":
+        # Top-K rank action은 state마다 의미가 바뀌므로 PPO update를 보수적으로 제한한다.
+        cmd += [
+            "--learning-rate",
+            str(args.ppo_learning_rate),
+            "--ent-coef",
+            str(args.ppo_ent_coef),
+            "--target-kl",
+            str(args.ppo_target_kl),
+            "--clip-range",
+            str(args.ppo_clip_range),
+            "--n-epochs",
+            str(args.ppo_n_epochs),
+            "--n-steps",
+            str(args.ppo_n_steps),
+            "--batch-size",
+            str(args.ppo_batch_size),
+        ]
     if args.algorithm == "a2c":
         cmd += ["--bc-val-dates", "0", "--anchor-coef", "0.0"]
     if args.progress:
@@ -215,6 +237,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-every-timesteps", type=int, default=20_000)
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--candidate-top-k", type=int, default=12)
+    parser.add_argument("--ppo-preset", choices=["default", "stable"], default="default")
+    parser.add_argument("--ppo-learning-rate", type=float, default=1e-4)
+    parser.add_argument("--ppo-ent-coef", type=float, default=0.003)
+    parser.add_argument("--ppo-target-kl", type=float, default=0.03)
+    parser.add_argument("--ppo-clip-range", type=float, default=0.1)
+    parser.add_argument("--ppo-n-epochs", type=int, default=5)
+    parser.add_argument("--ppo-n-steps", type=int, default=256)
+    parser.add_argument("--ppo-batch-size", type=int, default=128)
     parser.add_argument("--tag", default="interactive")
     parser.add_argument("--device", default="cpu", choices=["auto", "cpu", "mps"])
     parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=True)
@@ -241,6 +271,8 @@ def main() -> None:
             f"eval_every_timesteps={args.eval_every_timesteps}, "
             f"top_k={args.candidate_top_k}"
         )
+        if args.algorithm == "ppo":
+            print(f"ppo_preset={args.ppo_preset}")
 
     for index, district in enumerate(districts, start=1):
         print("\n" + "=" * 80)
