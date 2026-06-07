@@ -237,7 +237,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-every-timesteps", type=int, default=20_000)
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--candidate-top-k", type=int, default=12)
-    parser.add_argument("--ppo-preset", choices=["default", "stable"], default="default")
+    parser.add_argument("--ppo-preset", choices=["stable", "default"], default="stable")
     parser.add_argument("--ppo-learning-rate", type=float, default=1e-4)
     parser.add_argument("--ppo-ent-coef", type=float, default=0.003)
     parser.add_argument("--ppo-target-kl", type=float, default=0.03)
