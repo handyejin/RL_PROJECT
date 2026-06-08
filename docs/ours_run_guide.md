@@ -60,15 +60,12 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python scripts/train_demand_forecast.p
   --metrics-out data/forecast_by_gu/demand_forecast_1h_영등포구_metrics.json
 ```
 
-25개 구 전체 forecast와 A2C 결과를 한 번에 만들려면 아래 runner를 사용할 수 있다.
+25개 구 전체 학습은 `run_from_config`에서 `--district ALL`을 지정한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_gu_a2c_full \
-  --episodes 500 \
-  --eval-every 50 \
-  --n-train-dates 200 \
-  --run-tag gu_a2c_topk_no_bc_2026-06-06 \
-  --device cpu
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+  --config config/ours/a2c_topk12.yaml \
+  --district ALL
 ```
 
 ## 4. 쉽게 실행하는 방법
