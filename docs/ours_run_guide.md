@@ -164,7 +164,48 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
   --progress
 ```
 
-### 4.1 YAML 파일로 실행하는 방법
+### 4.1 REINFORCE/A2C 전용 실행기
+
+REINFORCE와 A2C만 확인할 때는 전용 interactive runner를 사용할 수 있다. 이 실행기는 담당 알고리즘만
+보이도록 메뉴를 줄였고, Best/Worst 3구 seed 반복 실험도 메뉴에서 바로 실행할 수 있다.
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive
+```
+
+메뉴는 다음 세 가지다.
+
+```text
+1. REINFORCE/A2C 학습 실행
+2. VAE latent 파일 생성
+3. Best/Worst 3구 seed 반복 실험
+```
+
+seed 반복 실험은 다음 기준으로 자동 실행된다.
+
+```text
+서울 전체 25개 구: seed 42 기존 full run 로그 재사용
+Best/Worst 3구: seed 123, 777 추가 학습
+결과 저장: docs/rl_seed_sensitivity_a2c_reinforce_날짜시간.*
+```
+
+명령형으로 바로 확인하려면:
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive \
+  --mode seed \
+  --dry-run
+```
+
+실제로 실행하려면 `--dry-run`만 빼면 된다.
+
+이미 만들어진 seed 로그도 무시하고 다시 학습하려면 다음 옵션을 추가한다.
+
+```bash
+--no-skip-existing
+```
+
+### 4.2 YAML 파일로 실행하는 방법
 
 Top-K처럼 실험마다 바꾸는 값은 YAML 파일로 관리할 수 있다.
 
