@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Replay Viewer</title>
+  <style>
+    :root {
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --ink: #1f2937;
+      --muted: #667085;
+      --line: #d9dee8;
+      --blue: #2f6fed;
+      --red: #d64f45;
+      --green: #14835d;
+      --amber: #d18800;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    header {
+      padding: 18px 24px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    h1 {
+      margin: 0 0 6px;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    main {
+      display: grid;
+      grid-template-columns: minmax(520px, 1fr) 360px;
+      gap: 16px;
+      padding: 16px;
+      min-height: calc(100vh - 84px);
+    }
+    .map-panel, .side-panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+    button {
+      border: 1px solid #c7cedb;
+      background: #fff;
+      color: var(--ink);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button.primary {
+      color: #fff;
+      background: var(--blue);
+      border-color: var(--blue);
+    }
+    select {
+      min-width: 280px;
+      max-width: min(520px, 100%);
+      border: 1px solid #c7cedb;
+      background: #fff;
+      color: var(--ink);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+    input[type="range"] {
+      flex: 1;
+      min-width: 180px;
+    }
+    #map {
+      width: 100%;
+      height: calc(100vh - 174px);
+      min-height: 520px;
+      display: block;
+      background:
+        linear-gradient(90deg, rgba(31,41,55,0.045) 1px, transparent 1px),
+        linear-gradient(rgba(31,41,55,0.045) 1px, transparent 1px);
+      background-size: 48px 48px;
+    }
+    .side-panel {
+      padding: 14px;
+      overflow-y: auto;
+      max-height: calc(100vh - 116px);
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin: 12px 0;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px;
+      background: #fbfcff;
+    }
+    .metric .label {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      margin-bottom: 3px;
+    }
+    .metric .value {
+      font-weight: 700;
+      font-size: 15px;
+    }
+    h2 {
+      font-size: 15px;
+      margin: 18px 0 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th, td {
+      padding: 7px 6px;
+      border-bottom: 1px solid var(--line);
+      text-align: right;
+      white-space: nowrap;
+    }
+    th:first-child, td:first-child,
+    th:nth-child(2), td:nth-child(2) {
+      text-align: left;
+    }
+    .legend {
+      display: grid;
+      gap: 7px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 12px;
+    }
+    .dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: -1px;
+    }
+    .empty { background: var(--red); }
+    .balanced { background: var(--green); }
+    .full { background: var(--amber); }
+    .candidate { background: var(--blue); }
+    .station-info {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fbfcff;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+    .station-info strong {
+      display: block;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .station-info .muted {
+      color: var(--muted);
+    }
+    .hint {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    @media (max-width: 980px) {
+      main { grid-template-columns: 1fr; }
+      #map { height: 560px; }
+      .side-panel { max-height: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Replay Viewer</h1>
+  </header>
+
+  <main>
+    <section class="map-panel">
+      <div class="toolbar">
+        <select id="replay-select" aria-label="replay JSON 선택">
+          <option value="">JSON 목록 불러오는 중...</option>
+        </select>
+        <button id="prev">◀</button>
+        <button id="play" class="primary">재생</button>
+        <button id="next">▶</button>
+        <input id="slider" type="range" min="0" max="0" value="0" />
+        <span id="step-label" class="sub">0 / 0</span>
+      </div>
+      <svg id="map" role="img" aria-label="따릉이 재배치 replay map"></svg>
+    </section>
+
+    <aside class="side-panel">
+      <h2>Episode</h2>
+      <div id="meta" class="sub">JSON 파일을 선택하세요.</div>
+      <div class="metric-grid">
+        <div class="metric"><span class="label">누적 reward</span><span id="m-reward" class="value">-</span></div>
+        <div class="metric"><span class="label">현재 step</span><span id="m-step" class="value">-</span></div>
+        <div class="metric"><span class="label">stockout</span><span id="m-stockout" class="value">-</span></div>
+        <div class="metric"><span class="label">full</span><span id="m-full" class="value">-</span></div>
+        <div class="metric"><span class="label">이동 km</span><span id="m-km" class="value">-</span></div>
+        <div class="metric"><span class="label">선택 정류소</span><span id="m-action" class="value">-</span></div>
+      </div>
+
+      <h2>Top-K 후보 확률</h2>
+      <table>
+        <thead>
+          <tr><th>rank</th><th>station</th><th>prob</th></tr>
+        </thead>
+        <tbody id="candidates"></tbody>
+      </table>
+
+      <h2>선택 정류소</h2>
+      <div id="station-info" class="station-info">
+        <span class="muted">지도에서 정류소를 클릭하세요.</span>
+      </div>
+
+      <h2>Legend</h2>
+      <div class="legend">
+        <div><span class="dot empty"></span>재고 비율 낮음</div>
+        <div><span class="dot balanced"></span>목표 재고 근처</div>
+        <div><span class="dot full"></span>재고 비율 높음</div>
+        <div><span class="dot candidate"></span>현재 Top-K 후보(파란 테두리)</div>
+      </div>
+      <div class="hint">
+        원 크기는 정류소 capacity에 비례하고, 파란 테두리는 현재 정책이 고려한 Top-K 후보입니다.
+        트럭은 번호가 있는 사각형으로 표시되며 이동 중이면 목적지까지 선이 그려집니다.
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    const DEFAULT_JSON = "강남구_REINFORCE_2025-03-25.json";
+    let replay = null;
+    let index = 0;
+    let playing = false;
+    let timer = null;
+    let project = null;
+    let selectedStation = null;
+
+    const $ = (id) => document.getElementById(id);
+    const svg = $("map");
+
+    function fmt(value, digits = 1) {
+      if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+      return Number(value).toFixed(digits);
+    }
+
+    function make(tag, attrs = {}) {
+      const el = document.createElementNS(SVG_NS, tag);
+      for (const [key, value] of Object.entries(attrs)) el.setAttribute(key, value);
+      return el;
+    }
+
+    function setupProjection(coords) {
+      const width = svg.clientWidth || 900;
+      const height = svg.clientHeight || 620;
+      const lats = coords.map((c) => Number(c[0]));
+      const lons = coords.map((c) => Number(c[1]));
+      const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+      const minLon = Math.min(...lons), maxLon = Math.max(...lons);
+      const pad = 38;
+      return ([lat, lon]) => {
+        const x = pad + ((Number(lon) - minLon) / Math.max(maxLon - minLon, 1e-9)) * (width - pad * 2);
+        const y = height - pad - ((Number(lat) - minLat) / Math.max(maxLat - minLat, 1e-9)) * (height - pad * 2);
+        return [x, y];
+      };
+    }
+
+    function stationColor(ratio) {
+      if (ratio < 0.25) return "#d64f45";
+      if (ratio > 0.75) return "#d18800";
+      return "#14835d";
+    }
+
+    function stationSummary(stationIndex, snap, meta) {
+      const cap = Math.max(Number((meta.station_capacities || [])[stationIndex] || 20), 1);
+      const bikes = Number((snap.bikes || [])[stationIndex] || 0);
+      const ratio = bikes / cap;
+      const coord = (meta.station_coords || [])[stationIndex] || [null, null];
+      const candidate = (snap.candidate_rows || []).find((row) => Number(row.station_index) === Number(stationIndex));
+      const candidateText = candidate
+        ? `후보 rank ${candidate.rank}, 확률 ${(candidate.prob * 100).toFixed(1)}%`
+        : "현재 Top-K 후보 아님";
+      return {
+        stationId: meta.station_ids[stationIndex],
+        bikes,
+        cap,
+        ratio,
+        lat: coord[0],
+        lon: coord[1],
+        candidateText,
+      };
+    }
+
+    function updateStationInfo(stationIndex, snap, meta) {
+      if (stationIndex === null || stationIndex === undefined) {
+        $("station-info").innerHTML = `<span class="muted">지도에서 정류소를 클릭하세요.</span>`;
+        return;
+      }
+      const info = stationSummary(stationIndex, snap, meta);
+      $("station-info").innerHTML = `
+        <strong>${info.stationId}</strong>
+        <div>재고: ${info.bikes} / ${info.cap}</div>
+        <div>재고 비율: ${(info.ratio * 100).toFixed(1)}%</div>
+        <div>위치: ${Number(info.lat).toFixed(6)}, ${Number(info.lon).toFixed(6)}</div>
+        <div>${info.candidateText}</div>
+      `;
+    }
+
+    function selectStation(stationIndex) {
+      selectedStation = Number(stationIndex);
+      draw();
+    }
+
+    window.selectStation = selectStation;
+
+    function draw() {
+      if (!replay) return;
+      const snap = replay.snapshots[index];
+      const meta = replay.meta;
+      project = project || setupProjection(meta.station_coords);
+      svg.innerHTML = "";
+
+      const candidateSet = new Set((snap.candidate_station_indices || []).map(Number));
+      const capacities = meta.station_capacities || [];
+      const maxCap = Math.max(...capacities, 1);
+
+      meta.station_coords.forEach((coord, i) => {
+        const [x, y] = project(coord);
+        const cap = Math.max(Number(capacities[i] || 20), 1);
+        const bikes = Number(snap.bikes[i] || 0);
+        const ratio = bikes / cap;
+        const baseRadius = 3.5 + Math.sqrt(cap / maxCap) * 7;
+        const isCandidate = candidateSet.has(i);
+        if (isCandidate) {
+          svg.appendChild(make("circle", {
+            cx: x, cy: y, r: baseRadius + 5,
+            fill: "#2f6fed",
+            "fill-opacity": 0.14,
+            stroke: "#2f6fed",
+            "stroke-width": 2,
+            "stroke-opacity": 0.85,
+            "pointer-events": "none",
+          }));
+        }
+        const circle = make("circle", {
+          cx: x, cy: y, r: baseRadius,
+          fill: stationColor(ratio),
+          "fill-opacity": 0.72,
+          stroke: isCandidate ? "#2f6fed" : "#ffffff",
+          "stroke-width": isCandidate ? 4 : 1,
+          cursor: "pointer",
+          "data-station-index": i,
+          "data-base-radius": baseRadius,
+          "data-base-stroke": isCandidate ? "#2f6fed" : "#ffffff",
+          "data-base-stroke-width": isCandidate ? 4 : 1,
+        });
+        circle.appendChild(document.createElementNS(SVG_NS, "title"))
+          .textContent = `${meta.station_ids[i]} bikes=${bikes}/${cap}`;
+        circle.addEventListener("mouseenter", () => {
+          circle.setAttribute("r", String(baseRadius + 3));
+          circle.setAttribute("stroke", "#1d4ed8");
+          circle.setAttribute("stroke-width", "3");
+          circle.setAttribute("fill-opacity", "0.92");
+        });
+        circle.addEventListener("mouseleave", () => {
+          circle.setAttribute("r", String(baseRadius));
+          circle.setAttribute("stroke", circle.dataset.baseStroke || "#ffffff");
+          circle.setAttribute("stroke-width", circle.dataset.baseStrokeWidth || "1");
+          circle.setAttribute("fill-opacity", "0.72");
+        });
+        circle.addEventListener("click", () => selectStation(i));
+        svg.appendChild(circle);
+      });
+
+      (snap.trucks || []).forEach((truck, i) => {
+        const locCoord = meta.station_coords[truck.loc];
+        const destCoord = meta.station_coords[truck.dest];
+        if (!locCoord) return;
+        let [x, y] = project(locCoord);
+        if (truck.remaining > 0 && destCoord) {
+          const [dx, dy] = project(destCoord);
+          const total = Math.max(Number(truck.total_steps || truck.remaining), 1);
+          const progress = 1 - Number(truck.remaining) / total;
+          const line = make("line", { x1: x, y1: y, x2: dx, y2: dy, stroke: "#344054", "stroke-width": 1.4, "stroke-dasharray": "4 4" });
+          svg.appendChild(line);
+          x = x + (dx - x) * progress;
+          y = y + (dy - y) * progress;
+        }
+        const group = make("g");
+        group.appendChild(make("rect", { x: x - 11, y: y - 11, width: 22, height: 22, rx: 4, fill: "#111827" }));
+        const text = make("text", { x, y: y + 4, "text-anchor": "middle", "font-size": 11, "font-weight": 700, fill: "#ffffff" });
+        text.textContent = String(i + 1);
+        group.appendChild(text);
+        group.appendChild(document.createElementNS(SVG_NS, "title"))
+          .textContent = `truck ${i + 1}, load=${truck.load}, remaining=${truck.remaining}`;
+        svg.appendChild(group);
+      });
+
+      updateSidePanel(snap, meta);
+    }
+
+    function updateSidePanel(snap, meta) {
+      $("meta").textContent = `${meta.district} · ${meta.date} · ${String(meta.algo || "-").toUpperCase()} · ${meta.state} · Top-K ${meta.candidate_top_k}`;
+      $("m-reward").textContent = fmt(snap.cum_reward);
+      $("m-step").textContent = `${snap.rl_step} / ${meta.rl_steps}`;
+      $("m-stockout").textContent = String(snap.cum_stockout);
+      $("m-full").textContent = String(snap.cum_full);
+      $("m-km").textContent = fmt(snap.cum_km);
+      $("m-action").textContent = snap.action_name || "-";
+      $("step-label").textContent = `${index} / ${replay.snapshots.length - 1}`;
+      $("slider").value = String(index);
+      updateStationInfo(selectedStation, snap, meta);
+
+      const rows = (snap.candidate_rows || []).slice(0, 12)
+        .map((row) => `<tr><td>${row.rank}</td><td>${row.station_id}</td><td>${(row.prob * 100).toFixed(1)}%</td></tr>`)
+        .join("");
+      $("candidates").innerHTML = rows || `<tr><td colspan="3">후보 정보 없음</td></tr>`;
+    }
+
+    function loadReplay(obj, fileName = "replay JSON") {
+      replay = obj;
+      index = 0;
+      project = null;
+      selectedStation = null;
+      $("slider").max = String(replay.snapshots.length - 1);
+      draw();
+    }
+
+    async function loadReplayFile(fileName) {
+      const response = await fetch(fileName);
+      if (!response.ok) throw new Error(`${fileName} 파일을 찾을 수 없습니다.`);
+      loadReplay(await response.json(), fileName);
+    }
+
+    async function refreshReplayList() {
+      const select = $("replay-select");
+      let files = [DEFAULT_JSON];
+      try {
+        const response = await fetch("./");
+        const html = await response.text();
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        const discovered = Array.from(doc.querySelectorAll("a"))
+          .map((a) => decodeURIComponent(a.getAttribute("href") || ""))
+          .map((href) => href.split("/").pop())
+          .filter((name) => /_(REINFORCE|A2C|PPO|DQN)_\d{4}-\d{2}-\d{2}\.json$/u.test(name));
+        files = Array.from(new Set([...discovered, DEFAULT_JSON])).sort();
+      } catch (err) {
+        files = [DEFAULT_JSON];
+      }
+      select.innerHTML = files
+        .map((name) => `<option value="${name}">${name}</option>`)
+        .join("");
+      select.value = files.includes(DEFAULT_JSON) ? DEFAULT_JSON : files[0];
+      return select.value;
+    }
+
+    $("replay-select").addEventListener("change", () => {
+      const fileName = $("replay-select").value;
+      if (!fileName) return;
+      loadReplayFile(fileName).catch((err) => alert(err.message));
+    });
+    $("slider").addEventListener("input", (event) => { index = Number(event.target.value); draw(); });
+    $("prev").addEventListener("click", () => { if (!replay) return; index = Math.max(0, index - 1); draw(); });
+    $("next").addEventListener("click", () => { if (!replay) return; index = Math.min(replay.snapshots.length - 1, index + 1); draw(); });
+    $("play").addEventListener("click", () => {
+      if (!replay) return;
+      playing = !playing;
+      $("play").textContent = playing ? "정지" : "재생";
+      if (timer) clearInterval(timer);
+      if (playing) {
+        timer = setInterval(() => {
+          if (!replay || index >= replay.snapshots.length - 1) {
+            playing = false;
+            $("play").textContent = "재생";
+            clearInterval(timer);
+            return;
+          }
+          index += 1;
+          draw();
+        }, 260);
+      }
+    });
+
+    window.addEventListener("resize", () => { project = null; draw(); });
+    refreshReplayList()
+      .then((fileName) => fileName && loadReplayFile(fileName))
+      .catch(() => {});
+  </script>
+</body>
+</html>

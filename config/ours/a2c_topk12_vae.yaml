@@ -1,0 +1,33 @@
+# A2C VAE 실험 설정: forecast Top-K 12 + VAE latent state 보강, BC 없음
+
+algorithm: a2c
+district: 강남구
+
+data:
+  processed_dir: data/processed_seoul_all
+  forecast_dir: data/forecast_by_gu
+  vae_latent_dir: data/vae_latent_by_gu
+  capacity_path: data/processed/station_capacity.csv
+
+training:
+  episodes: 500
+  eval_every: 50
+  n_train_dates: 200
+  bc_epochs: 0
+  tag: yaml_a2c_topk12_vae
+  device: cpu
+  progress: true
+
+state:
+  future_mode: forecast_projected_travel
+  future_horizon: 6
+  vae_mode: demand_latent
+  vae_latent_dim: 4
+
+candidate_action:
+  top_k: 12
+  mode: forecast_imbalance
+  travel_coef: 0.20
+  zone_mode: static3
+  zone_penalty: 1.0
+  feature_mode: basic

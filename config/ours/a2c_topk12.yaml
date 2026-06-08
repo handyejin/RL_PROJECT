@@ -1,0 +1,30 @@
+# A2C 보고서 기준 설정: 수정 state + 수요예측 + Top-K 12, BC 없음
+
+algorithm: a2c
+district: 강남구
+
+data:
+  processed_dir: data/processed_seoul_all
+  forecast_dir: data/forecast_by_gu
+  capacity_path: data/processed/station_capacity.csv
+
+training:
+  episodes: 500
+  eval_every: 50
+  n_train_dates: 200
+  bc_epochs: 0
+  tag: yaml_a2c_topk12
+  device: cpu
+  progress: true
+
+state:
+  future_mode: forecast_projected_travel
+  future_horizon: 6
+
+candidate_action:
+  top_k: 12
+  mode: forecast_imbalance
+  travel_coef: 0.20
+  zone_mode: static3
+  zone_penalty: 1.0
+  feature_mode: basic
