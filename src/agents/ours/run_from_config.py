@@ -1,7 +1,7 @@
 """우리 실험용 YAML 실행기.
 
 팀원 공통 `config/default.yaml`과 `scripts/train.py`를 수정하지 않고,
-`config/ours/*.yaml`에 적은 설정으로 REINFORCE/A2C/DQN/PPO 실험을 실행한다.
+`config/ours/*.yaml`에 적은 설정으로 REINFORCE/A2C/DQN/PPO/Bandit 실험을 실행한다.
 
 YAML에서 관리하는 핵심 값:
     - algorithm, district
@@ -21,59 +21,26 @@ YAML에서 관리하는 핵심 값:
 from __future__ import annotations
 
 import argparse
-import os
 import subprocess
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import yaml
 
-from src.agents.ours.run_interactive import DISTRICTS, PROJECT_ROOT, build_command, ensure_inputs
+from src.agents.ours.common.runner_config import (
+    DEFAULT_RUNNER_VALUES,
+    PROJECT_ROOT,
+    build_training_command,
+    ensure_training_inputs,
+    selected_districts,
+    subprocess_env,
+)
 
 
 # 보고서 기준 하이퍼파라미터는 YAML 파일에 명시한다.
 # 이 dict는 YAML 누락값을 채우는 안전 fallback으로만 사용한다.
-DEFAULTS: dict[str, Any] = {
-    "algorithm": "dqn",
-    "district": "강남구",
-    "processed_dir": "data/processed_seoul_all",
-    "forecast_dir": "data/forecast_by_gu",
-    "vae_latent_dir": "data/vae_latent_by_gu",
-    "capacity_path": "data/processed/station_capacity.csv",
-    "episodes": 500,
-    "total_timesteps": 170_000,
-    "eval_every": 50,
-    "eval_every_timesteps": 20_000,
-    "n_train_dates": 200,
-    "bc_epochs": 0,
-    "future_mode": "forecast_projected_travel",
-    "future_horizon": 6,
-    "vae_mode": "none",
-    "vae_latent_dim": 4,
-    "candidate_top_k": 12,
-    "candidate_mode": "forecast_imbalance",
-    "candidate_travel_coef": 0.20,
-    "candidate_zone_mode": "static3",
-    "candidate_zone_penalty": 1.0,
-    "candidate_feature_mode": "basic",
-    "ppo_learning_rate": 1e-4,
-    "ppo_ent_coef": 0.003,
-    "ppo_target_kl": 0.03,
-    "ppo_clip_range": 0.1,
-    "ppo_n_epochs": 5,
-    "ppo_n_steps": 256,
-    "ppo_batch_size": 128,
-    "dqn_reward_scale": 0.01,
-    "dqn_exploration_initial_eps": 0.3,
-    "dqn_exploration_fraction": 0.2,
-    "dqn_exploration_final_eps": 0.02,
-    "tag": "yaml",
-    "device": "cpu",
-    "progress": True,
-    "dry_run": False,
-}
+DEFAULTS: dict[str, Any] = {**DEFAULT_RUNNER_VALUES, "algorithm": "dqn", "tag": "yaml"}
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -171,6 +138,15 @@ def build_args(config: dict[str, Any], cli: argparse.Namespace) -> SimpleNamespa
             "batch_size": "ppo_batch_size",
         },
     )
+    _apply_section(
+        values,
+        config.get("bandit", {}),
+        {
+            "alpha": "bandit_alpha",
+            "l2": "bandit_l2",
+            "reward_scale": "bandit_reward_scale",
+        },
+    )
 
     for key in ["algorithm", "district", "tag", "device"]:
         cli_value = getattr(cli, key, None)
@@ -188,7 +164,7 @@ def parse_args() -> argparse.Namespace:
     """YAML runner CLI 옵션을 정의한다."""
     parser = argparse.ArgumentParser(description="Run our RL experiment from YAML config.")
     parser.add_argument("--config", required=True, help="예: config/ours/dqn_topk3.yaml")
-    parser.add_argument("--algorithm", choices=["reinforce", "a2c", "dqn", "ppo"], default="")
+    parser.add_argument("--algorithm", choices=["reinforce", "a2c", "dqn", "ppo", "bandit"], default="")
     parser.add_argument("--district", default="", help="YAML district override. ALL 가능.")
     parser.add_argument("--candidate-top-k", type=int, default=None, help="YAML top_k override.")
     parser.add_argument("--tag", default="", help="YAML tag override.")
@@ -205,7 +181,7 @@ def main() -> None:
         config_path = PROJECT_ROOT / config_path
     args = build_args(_load_yaml(config_path), cli)
 
-    districts = DISTRICTS if str(args.district).upper() == "ALL" else [args.district]
+    districts = selected_districts(args.district)
     print(f"[config] {config_path}")
     print(f"algorithm={args.algorithm}, districts={', '.join(districts)}")
     print(
@@ -217,17 +193,14 @@ def main() -> None:
     for index, district in enumerate(districts, start=1):
         print("\n" + "=" * 80, flush=True)
         print(f"[{index}/{len(districts)}] {district} 실행", flush=True)
-        if not ensure_inputs(args, district):
+        if not ensure_training_inputs(args, district):
             continue
-        cmd = build_command(args, district)
+        cmd = build_training_command(args, district)
         print("명령:", flush=True)
         print(" ".join(cmd), flush=True)
         if args.dry_run:
             continue
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PYTHONPATH"] = str(PROJECT_ROOT)
-        code = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env).returncode
+        code = subprocess.run(cmd, cwd=PROJECT_ROOT, env=subprocess_env()).returncode
         if code != 0:
             raise SystemExit(code)
 

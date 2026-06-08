@@ -10,6 +10,7 @@
 | A2C | Actor-Critic 구조, `r + gamma V(s') - V(s)` advantage 사용 |
 | DQN | action mask를 적용한 Double DQN + Dueling Q 안정화 옵션 |
 | PPO | action mask를 적용한 MaskablePPO |
+| Contextual Bandit | Top-K 후보 중 현재 feature 기준으로 하나를 고르는 LinUCB 비교 모델 |
 
 ## 1. 실험에서 사용하는 데이터
 
@@ -143,6 +144,7 @@ PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
 2. A2C
 3. DQN (Double DQN)
 4. PPO
+5. Contextual Bandit (LinUCB)
 
 1. ALL
 2. 영등포구
@@ -176,6 +178,7 @@ Top-K처럼 실험마다 바꾸는 값은 YAML 파일로 관리할 수 있다.
 | `config/ours/a2c_topk12.yaml` | A2C 보고서 기준 실험 |
 | `config/ours/a2c_topk12_vae.yaml` | A2C + VAE latent 보조 실험 |
 | `config/ours/ppo_topk12.yaml` | PPO 보고서 기준 실험 |
+| `config/ours/bandit_topk12.yaml` | Contextual Bandit LinUCB 비교 실험 |
 
 예를 들어 DQN Top-K 3 실험은 다음처럼 실행한다.
 
@@ -218,6 +221,18 @@ PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
   --config config/ours/dqn_topk3.yaml \
   --dry-run
 ```
+
+Contextual Bandit은 다음처럼 실행한다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+  --config config/ours/bandit_topk12.yaml \
+  --district 강남구
+```
+
+이 실험은 장기 return을 직접 학습하는 RL이 아니라, 매 step마다 현재 Top-K 후보 중
+어느 후보를 고를지 학습하는 비교 모델이다. 따라서 REINFORCE/A2C/PPO/DQN보다
+단순하지만, action 후보 축소가 실제로 선택 문제를 쉽게 만드는지 확인하는 baseline으로 쓸 수 있다.
 
 Top-K는 다음 의미를 가진다.
 

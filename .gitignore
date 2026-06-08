@@ -29,11 +29,15 @@ data/processed/*
 !data/processed/station_capacity.csv
 data/processed_seoul_all/
 data/forecast_by_gu/
+data/vae_latent_by_gu/
+data/vae_latent_ablation/
+data/*.zip
 
 # Logs / artifacts
 logs/
 data/episode_cache/
 *.log
+tmp/
 
 # Generated replay JSONs (학습 후 재생성, 파일 큼)
 docs/replay*.json

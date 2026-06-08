@@ -1,8 +1,7 @@
-"""현재 25개 구 REINFORCE/A2C/PPO 결과로 보고서와 그림을 생성한다.
+"""현재 25개 구 REINFORCE/A2C/PPO/DQN 결과로 보고서와 그림을 생성한다.
 
-이 스크립트는 DQN 학습 결과를 의도적으로 제외한다. 현재 보고서의 목적은
-저장된 25개 구 로그를 기준으로 policy-gradient 계열 결과를 정리하고,
-구별 성능 차이를 설명할 수 있는 표와 시각화를 만드는 것이다.
+저장된 25개 구 로그를 기준으로 주요 강화학습 알고리즘 결과를 정리하고,
+구별 성능 차이를 설명할 수 있는 표와 시각화를 만든다.
 """
 
 from __future__ import annotations
@@ -13,6 +12,7 @@ import math
 import sys
 import textwrap
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -23,7 +23,7 @@ from matplotlib.patches import Polygon
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.agents.ours.common.reinforce_core import EVAL_DATES
+from src.agents.ours.algorithms.reinforce.core import EVAL_DATES
 DISTRICTS = [
     "강남구",
     "강동구",
@@ -55,6 +55,8 @@ ALGORITHMS = {
     "REINFORCE": ("logs/reinforce_interactive_reinforce_{district}", "episode"),
     "A2C": ("logs/actor_critic_interactive_a2c_{district}", "episode"),
     "PPO": ("logs/ppo_interactive_ppo_{district}", "timesteps"),
+    "DQN": ("logs/dqn_interactive_dqn_{district}", "timesteps"),
+    "BANDIT": ("logs/bandit_interactive_topk12_bandit_{district}", "timesteps"),
 }
 FIG_DIR = PROJECT_ROOT / "docs" / "figures"
 OUT_DIR = PROJECT_ROOT / "output" / "doc"
@@ -202,6 +204,39 @@ def collect_algorithm_results(baselines: pd.DataFrame, profiles: pd.DataFrame) -
     return summary, curves
 
 
+def collect_vae_results(baselines: pd.DataFrame) -> pd.DataFrame:
+    """VAE latent feature를 붙인 REINFORCE 추가 실험 결과를 집계한다.
+
+    VAE는 별도 정책 알고리즘이 아니라, 과거 수요 패턴을 저차원 latent로
+    압축해 기존 observation 뒤에 붙이는 state 보강 실험이다.
+    """
+    baseline_map = dict(zip(baselines["district"], baselines["baseline_reward"]))
+    rows = []
+    for district in DISTRICTS:
+        history_path = PROJECT_ROOT / f"logs/reinforce_interactive_topk12_reinforce_{district}" / "history.npy"
+        history = [row for row in read_history(history_path) if isinstance(row, dict) and "eval_reward" in row]
+        if not history or district not in baseline_map:
+            continue
+        rewards = [float(row["eval_reward"]) for row in history]
+        episodes = [float(row.get("episode", idx)) for idx, row in enumerate(history)]
+        best_idx = int(np.argmax(rewards))
+        final_idx = len(history) - 1
+        baseline = float(baseline_map[district])
+        rows.append(
+            {
+                "district": district,
+                "baseline_reward": baseline,
+                "best_reward": rewards[best_idx],
+                "final_reward": rewards[final_idx],
+                "best_delta": rewards[best_idx] - baseline,
+                "final_delta": rewards[final_idx] - baseline,
+                "best_episode": episodes[best_idx],
+                "n_eval_points": len(history),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def algorithm_summary_table(summary: pd.DataFrame) -> pd.DataFrame:
     """알고리즘별 평균 성능 요약표를 만든다."""
     rows = []
@@ -219,7 +254,7 @@ def algorithm_summary_table(summary: pd.DataFrame) -> pd.DataFrame:
                 "mean_final_reward": float(group["final_reward"].mean()),
             }
         )
-    order = {"A2C": 0, "REINFORCE": 1, "PPO": 2}
+    order = {"A2C": 0, "REINFORCE": 1, "PPO": 2, "DQN": 3, "BANDIT": 4}
     return pd.DataFrame(rows).sort_values("algorithm", key=lambda s: s.map(order))
 
 
@@ -234,17 +269,25 @@ def best_worst_table(summary: pd.DataFrame, n: int = 3) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def save_csvs(summary: pd.DataFrame, algo_summary: pd.DataFrame, bw: pd.DataFrame, out_dir: Path) -> None:
+def save_csvs(
+    summary: pd.DataFrame,
+    algo_summary: pd.DataFrame,
+    bw: pd.DataFrame,
+    vae_summary: pd.DataFrame,
+    out_dir: Path,
+) -> None:
     """보고서 숫자의 출처가 되는 CSV를 저장한다."""
     out_dir.mkdir(parents=True, exist_ok=True)
     summary.to_csv(out_dir / "rl_current_gu_algorithm_summary.csv", index=False, encoding="utf-8-sig")
     algo_summary.to_csv(out_dir / "rl_current_algorithm_summary.csv", index=False, encoding="utf-8-sig")
     bw.to_csv(out_dir / "rl_current_best_worst_gu.csv", index=False, encoding="utf-8-sig")
+    if not vae_summary.empty:
+        vae_summary.to_csv(out_dir / "rl_current_vae_reinforce_summary.csv", index=False, encoding="utf-8-sig")
 
 
 def plot_algorithm_distribution(summary: pd.DataFrame, path: Path) -> None:
     """구별 Best delta와 데이터 특성을 함께 보여주는 scorecard를 그린다."""
-    algorithms = ["REINFORCE", "A2C", "PPO"]
+    algorithms = ["REINFORCE", "A2C", "PPO", "DQN", "BANDIT"]
     pivot = summary.pivot(index="district", columns="algorithm", values="best_delta")[algorithms]
     meta = (
         summary[["district", "station_count", "active_station_count", "demand_volume", "forecast_station_coverage"]]
@@ -256,8 +299,8 @@ def plot_algorithm_distribution(summary: pd.DataFrame, path: Path) -> None:
     pivot = pivot.reindex(order)
     meta = meta.reindex(order)
 
-    fig = plt.figure(figsize=(13.2, 10.6))
-    grid = fig.add_gridspec(1, 4, width_ratios=[2.3, 0.72, 0.92, 0.78], wspace=0.08)
+    fig = plt.figure(figsize=(15.4, 10.6))
+    grid = fig.add_gridspec(1, 4, width_ratios=[3.25, 0.72, 0.92, 0.78], wspace=0.08)
     ax_heat = fig.add_subplot(grid[0, 0])
     ax_station = fig.add_subplot(grid[0, 1], sharey=ax_heat)
     ax_demand = fig.add_subplot(grid[0, 2], sharey=ax_heat)
@@ -333,9 +376,16 @@ def plot_algorithm_distribution(summary: pd.DataFrame, path: Path) -> None:
 
 def plot_learning_curves(curves: pd.DataFrame, path: Path) -> None:
     """평가 delta의 평균선과 IQR band를 그린다."""
-    fig, axes = plt.subplots(1, 3, figsize=(15, 4.7), sharey=True)
-    colors = {"REINFORCE": "#4F7CCB", "A2C": "#2CA25F", "PPO": "#E08A2E"}
-    for ax, algorithm in zip(axes, ["REINFORCE", "A2C", "PPO"]):
+    algorithms = ["REINFORCE", "A2C", "PPO", "DQN", "BANDIT"]
+    fig, axes = plt.subplots(1, 5, figsize=(21, 4.7), sharey=True)
+    colors = {
+        "REINFORCE": "#4F7CCB",
+        "A2C": "#2CA25F",
+        "PPO": "#E08A2E",
+        "DQN": "#7C3AED",
+        "BANDIT": "#0891B2",
+    }
+    for ax, algorithm in zip(axes, algorithms):
         data = curves[curves["algorithm"] == algorithm].copy()
         data["progress_pct"] = (data["progress"] * 100).round(0)
         grouped = data.groupby("progress_pct")["eval_delta"]
@@ -361,9 +411,16 @@ def plot_learning_curves(curves: pd.DataFrame, path: Path) -> None:
 
 def plot_best_worst_curves(summary: pd.DataFrame, curves: pd.DataFrame, path: Path) -> None:
     """각 알고리즘의 Best/Worst 3 구를 구별 박스로 나누어 그린다."""
-    fig, axes = plt.subplots(3, 6, figsize=(18, 9), sharex=True, sharey=False)
-    colors = {"REINFORCE": "#4F7CCB", "A2C": "#2CA25F", "PPO": "#E08A2E"}
-    for row, algorithm in enumerate(["REINFORCE", "A2C", "PPO"]):
+    algorithms = ["REINFORCE", "A2C", "PPO", "DQN", "BANDIT"]
+    fig, axes = plt.subplots(5, 6, figsize=(18, 13.8), sharex=True, sharey=False)
+    colors = {
+        "REINFORCE": "#4F7CCB",
+        "A2C": "#2CA25F",
+        "PPO": "#E08A2E",
+        "DQN": "#7C3AED",
+        "BANDIT": "#0891B2",
+    }
+    for row, algorithm in enumerate(algorithms):
         data = summary[summary["algorithm"] == algorithm]
         selected = pd.concat(
             [
@@ -428,7 +485,7 @@ def plot_best_worst_curves(summary: pd.DataFrame, curves: pd.DataFrame, path: Pa
                     fontweight="bold",
                     color=colors[algorithm],
                 )
-            if row == 2:
+            if row == len(algorithms) - 1:
                 ax.set_xlabel("Progress (%)")
     fig.suptitle(
         "알고리즘별 Best/Worst 3 구 학습곡선: 각 박스는 하나의 구를 의미",
@@ -442,8 +499,14 @@ def plot_best_worst_curves(summary: pd.DataFrame, curves: pd.DataFrame, path: Pa
 
 def plot_best_worst_curves_by_algorithm(summary: pd.DataFrame, curves: pd.DataFrame, out_dir: Path) -> None:
     """보고서 가독성을 위해 알고리즘별 Best/Worst 3 구 그래프를 별도 저장한다."""
-    colors = {"REINFORCE": "#4F7CCB", "A2C": "#2CA25F", "PPO": "#E08A2E"}
-    for algorithm in ["REINFORCE", "A2C", "PPO"]:
+    colors = {
+        "REINFORCE": "#4F7CCB",
+        "A2C": "#2CA25F",
+        "PPO": "#E08A2E",
+        "DQN": "#7C3AED",
+        "BANDIT": "#0891B2",
+    }
+    for algorithm in ["REINFORCE", "A2C", "PPO", "DQN", "BANDIT"]:
         data = summary[summary["algorithm"] == algorithm]
         selected = pd.concat(
             [
@@ -491,7 +554,13 @@ def plot_best_worst_curves_by_algorithm(summary: pd.DataFrame, curves: pd.DataFr
 def plot_causal_scatter(summary: pd.DataFrame, path: Path) -> None:
     """수요 규모와 baseline 난이도 대비 성능 개선의 관계를 보여준다."""
     fig, axes = plt.subplots(1, 2, figsize=(13.5, 5.2))
-    colors = {"REINFORCE": "#4F7CCB", "A2C": "#2CA25F", "PPO": "#E08A2E"}
+    colors = {
+        "REINFORCE": "#4F7CCB",
+        "A2C": "#2CA25F",
+        "PPO": "#E08A2E",
+        "DQN": "#7C3AED",
+        "BANDIT": "#0891B2",
+    }
     for algorithm, group in summary.groupby("algorithm"):
         axes[0].scatter(
             group["demand_volume"],
@@ -643,7 +712,14 @@ def md_table(df: pd.DataFrame, columns: list[tuple[str, str]], digits: int = 1) 
     return "\n".join(lines)
 
 
-def build_report(summary: pd.DataFrame, curves: pd.DataFrame, algo_summary: pd.DataFrame, bw: pd.DataFrame, out_path: Path) -> None:
+def build_report(
+    summary: pd.DataFrame,
+    curves: pd.DataFrame,
+    algo_summary: pd.DataFrame,
+    bw: pd.DataFrame,
+    vae_summary: pd.DataFrame,
+    out_path: Path,
+) -> None:
     """기존 논문형 PDF 구조를 유지한 Markdown 보고서를 작성한다."""
     best_overall = summary.sort_values("best_delta", ascending=False).iloc[0]
     mean_best = summary.groupby("algorithm")["best_delta"].mean().sort_values(ascending=False)
@@ -766,10 +842,42 @@ def build_report(summary: pd.DataFrame, curves: pd.DataFrame, algo_summary: pd.D
             ("best_step", "Best step"),
         ],
     )
+    vae_table = ""
+    vae_line = "VAE 추가 실험 로그가 없어 본문 표에서는 제외했다."
+    if not vae_summary.empty:
+        vae_best_wins = int((vae_summary["best_delta"] > 0).sum())
+        vae_final_wins = int((vae_summary["final_delta"] > 0).sum())
+        vae_mean_best = float(vae_summary["best_delta"].mean())
+        vae_mean_final = float(vae_summary["final_delta"].mean())
+        vae_line = (
+            f"현재 완료된 {len(vae_summary)}개 구 VAE-REINFORCE 실험에서는 Best 기준 {vae_best_wins}개 구, "
+            f"Final 기준 {vae_final_wins}개 구가 baseline을 넘었다. 평균 Best Delta는 {vae_mean_best:+.1f}, "
+            f"평균 Final Delta는 {vae_mean_final:+.1f}였다."
+        )
+        vae_focus = pd.concat(
+            [
+                vae_summary.sort_values("best_delta", ascending=False).head(5).assign(group_type="개선 상위"),
+                vae_summary.sort_values("best_delta", ascending=True).head(5).assign(group_type="하락 상위"),
+            ],
+            ignore_index=True,
+        )
+        vae_table = md_table(
+            vae_focus,
+            [
+                ("group_type", "구분"),
+                ("district", "구"),
+                ("baseline_reward", "Baseline"),
+                ("best_reward", "Best"),
+                ("final_reward", "Final"),
+                ("best_delta", "Best Δ"),
+                ("final_delta", "Final Δ"),
+                ("best_episode", "Best episode"),
+            ],
+        )
 
     text = f"""# 수요예측 기반 Top-K 후보 구조를 활용한 서울 따릉이 재배치 강화학습
 
-**서울 25개 구 실험에서 A2C가 가장 안정적인 baseline 대비 개선을 보인 정책경사 비교**
+**서울 25개 구 실험에서 A2C가 가장 안정적이었고 Bandit은 단기 후보 선택의 한계를 보여준 알고리즘 비교**
 
 작성일: 2026-06-07
 
@@ -781,7 +889,7 @@ def build_report(summary: pd.DataFrame, curves: pd.DataFrame, algo_summary: pd.D
 
 본 실험에서는 세 가지 설계를 적용했다. 첫째, 10분 단위 대여/반납 데이터를 이용해 구별 **1시간 수요예측 feature**를 만들고 상태(state)에 추가했다. 둘째, 전체 정류소 행동(action)을 직접 선택하는 대신 매 step마다 수요예측 기반 **Top-K 후보 정류소 12개**를 구성했다. 셋째, 서울 25개 구를 같은 평가 날짜와 같은 baseline 기준으로 비교해 지역별 성능 차이를 분석했다.
 
-현재 보고서의 비교 알고리즘은 **REINFORCE with Value Baseline, A2C, PPO**이다. 모든 성능은 고정된 7개 평가일 평균 reward와 `MostImbalanced` baseline 대비 Delta로 평가했다. 결과적으로 **A2C가 평균 Best Delta {mean_best.get('A2C', float('nan')):+.1f}, 평균 Final Delta {mean_final.get('A2C', float('nan')):+.1f}로 가장 안정적**이었다. REINFORCE는 일부 구에서 큰 개선을 보였지만 분산이 컸고, PPO는 Best checkpoint 기준 가능성은 있으나 Final 안정성이 약했다.
+현재 보고서의 비교 알고리즘은 **REINFORCE with Value Baseline, A2C, PPO, Double DQN, Contextual Bandit(LinUCB)** 이다. 모든 성능은 고정된 7개 평가일 평균 reward와 `MostImbalanced` baseline 대비 Delta로 평가했다. 결과적으로 **A2C가 평균 Best Delta {mean_best.get('A2C', float('nan')):+.1f}, 평균 Final Delta {mean_final.get('A2C', float('nan')):+.1f}로 가장 안정적**이었다. REINFORCE와 PPO는 Best checkpoint 기준 가능성은 있었지만 Final 안정성이 낮았고, DQN은 Top-K rank action 구조에서 Q-value 학습이 가장 어려웠다. Bandit은 일부 구에서 빠르게 baseline을 넘었지만 장기 재배치 효과를 학습하지 못하는 한계가 있었다.
 
 ---
 
@@ -808,7 +916,9 @@ def build_report(summary: pd.DataFrame, curves: pd.DataFrame, algo_summary: pd.D
 
 강화학습 기반 재배치 연구에서는 dynamic vehicle routing problem과 bike rebalancing을 MDP로 정의하고, policy가 시간에 따라 다음 방문지 또는 dispatch action을 선택하도록 학습한다. 최근 연구들은 historical usage, weather, station attributes, demand forecast를 state에 넣는 방향을 사용한다.
 
-본 실험은 이 흐름과 맞닿아 있다. 핵심은 복잡한 알고리즘을 추가하는 것보다, **agent가 볼 수 있는 상태에 미래 수요를 넣고**, **탐색해야 하는 행동 후보를 줄여 학습 신호를 선명하게 만드는 것**이다.
+또한 RL에서 고차원 관측을 그대로 쓰지 않고 latent representation으로 압축해 policy 입력으로 사용하는 연구도 있다. Ha and Schmidhuber의 World Models는 비지도 방식으로 환경 표현을 압축하고 그 feature를 agent 입력으로 사용할 수 있음을 보였고, PlaNet은 latent dynamics를 학습해 latent 공간에서 planning을 수행했다. DeepMDP는 단순 복원(reconstruction)보다 reward와 다음 latent state를 잘 예측하는 representation이 RL에 더 직접적으로 유용하다는 관점을 제시한다.
+
+본 실험은 이 흐름과 맞닿아 있다. 핵심은 복잡한 알고리즘을 추가하는 것보다, **agent가 볼 수 있는 상태에 미래 수요를 넣고**, **탐색해야 하는 행동 후보를 줄여 학습 신호를 선명하게 만드는 것**이다. 추가로 VAE latent 실험은 과거 수요 패턴을 압축한 feature가 기존 수요예측 state를 보완할 수 있는지 확인하기 위한 확장 실험으로 배치했다.
 
 ---
 
@@ -908,6 +1018,18 @@ Top-K 구조는 agent가 정류소 전체를 무작위로 탐색하지 않도록
 
 Best는 "해당 설정에서 도달 가능한 성능"을 보여주고, Final은 "학습이 안정적으로 유지되는지"를 보여준다. 두 값을 함께 봐야 RL fine-tuning 중 policy가 무너지는지 판단할 수 있다.
 
+### 5.4 VAE latent state 보강
+
+VAE(Variational Autoencoder)는 정책을 직접 학습하는 알고리즘이 아니라, **과거 수요 패턴을 낮은 차원의 latent feature로 압축하는 표현학습 모듈**이다. 본 실험에서는 정류소별 같은 요일과 시간대의 대여 평균, 반납 평균, 순수요 평균, 총수요 평균, 순수요 표준편차를 VAE 입력으로 사용했다. 학습된 latent vector는 기존 observation 뒤에 추가했다.
+
+```text
+input_profile = [rental_mean, return_mean, net_mean, total_mean, net_std]
+z = VAE_encoder(input_profile)
+state_plus = concat(original_state, forecast_features, z)
+```
+
+따라서 VAE 실험은 imitation learning이나 policy 초기화가 아니다. 목적은 "수요예측 feature만으로 부족한 지역별 반복 패턴을 latent state로 보완할 수 있는가"를 확인하는 것이다.
+
 ---
 
 ## 6. 알고리즘 (Algorithms)
@@ -948,6 +1070,27 @@ L_clip = min(
 )
 ```
 
+### 6.4 Double DQN
+
+DQN은 Q-network가 각 action의 가치를 추정하고, replay buffer에서 뽑은 transition으로 TD target을 학습한다. 본 실험에서는 Q-value 과대추정을 줄이기 위해 Double DQN을 사용했고, 실행 설정에서는 Dueling Q-network도 함께 사용했다. 평가 reward는 원본 reward 그대로이며, 학습 TD target 안정화를 위해 학습 reward에만 `reward_scale=0.01`을 적용했다.
+
+```text
+a* = argmax_a Q_online(s', a)
+y = r + gamma * Q_target(s', a*)
+loss = Huber(Q_online(s, a), y)
+```
+
+### 6.5 Contextual Bandit (LinUCB)
+
+Contextual Bandit은 현재 state의 Top-K 후보 feature를 보고, 이번 step에서 어떤 후보를 고를지 학습한다. REINFORCE/A2C/PPO/DQN과 달리 다음 state 이후의 장기 return을 직접 bootstrapping하지 않는다. 본 실험에서는 LinUCB를 사용해 예측 reward와 uncertainty bonus를 함께 고려했다.
+
+```text
+theta_a = inv(A_a) b_a
+score_a = theta_a^T x_a + alpha * sqrt(x_a^T inv(A_a) x_a)
+A_a <- A_a + x_a x_a^T
+b_a <- b_a + reward * x_a
+```
+
 ---
 
 ## 7. 실험 설정 (Experimental Setup)
@@ -968,6 +1111,8 @@ L_clip = min(
 | rollback 사용 여부 | 현재 interactive full run은 rollback 없음 |
 | REINFORCE/A2C 학습량 | 500 episodes |
 | PPO 학습량 | 170,000 timesteps |
+| DQN 학습량 | 170,000 timesteps |
+| Bandit 학습량 | 170,000 timesteps |
 
 ### 7.1 주요 하이퍼파라미터
 
@@ -976,6 +1121,8 @@ L_clip = min(
 | REINFORCE | gamma=0.99, hidden=256, lr_policy=3e-4, lr_value=1e-3, normalize_advantages=True |
 | A2C | gamma=0.99, hidden=256, lr_policy=1e-4, lr_value=3e-4, batch_size=32, memory_size=200 |
 | PPO | gamma=0.99, gae_lambda=0.95, learning_rate=1e-4, clip_range=0.1, ent_coef=0.003, target_kl=0.03, n_steps=256, batch_size=128, n_epochs=5 |
+| DQN | Double DQN=True, Dueling=True, masked target Q=True, reward_scale=0.01, initial_eps=0.3, final_eps=0.02 |
+| Bandit | LinUCB, alpha=0.5, l2=1.0, reward_scale=0.01 |
 
 ---
 
@@ -985,9 +1132,9 @@ L_clip = min(
 
 {algo_table}
 
-**A2C**는 Best와 Final 모두 평균적으로 가장 안정적이었다. **REINFORCE**는 일부 구에서 큰 개선을 만들었지만 평균 Final Delta가 낮아 학습 후반 안정성 문제가 있었다. **PPO**는 Best checkpoint에서는 baseline을 넘는 구가 있었지만 Final에서 하락하는 경우가 많았다.
+**A2C**는 Best와 Final 모두 평균적으로 가장 안정적이었다. **REINFORCE**는 일부 구에서 큰 개선을 만들었지만 평균 Final Delta가 낮아 학습 후반 안정성 문제가 있었다. **PPO**는 Best checkpoint에서는 baseline을 넘는 구가 있었지만 Final에서 하락하는 경우가 많았다. **DQN**은 Double DQN과 Dueling Q-network를 사용했음에도 baseline을 넘지 못해, 현재 Top-K rank action 구조에서는 Q-value 기반 학습이 가장 어려운 것으로 나타났다. **Bandit**은 학습 속도는 가장 빠르지만, 장기 재고 변화와 이동 경로 효과를 직접 학습하지 못해 구별 편차가 컸다.
 
-Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. 왼쪽 세 열은 알고리즘별 Best Delta이고, 오른쪽은 정류소 수, 전체 수요량, forecast coverage이다. 붉은 셀이 몰린 구는 baseline을 넘지 못한 구이며, 오른쪽 지표를 함께 보면 단순 알고리즘 문제인지, 수요 규모가 큰 구의 reward scale 문제인지, 예측 데이터 coverage가 낮은 문제인지 비교할 수 있다.
+Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. 왼쪽 다섯 열은 알고리즘별 Best Delta이고, 오른쪽은 정류소 수, 전체 수요량, forecast coverage이다. 붉은 셀이 몰린 구는 baseline을 넘지 못한 구이며, 오른쪽 지표를 함께 보면 단순 알고리즘 문제인지, 수요 규모가 큰 구의 reward scale 문제인지, 예측 데이터 coverage가 낮은 문제인지 비교할 수 있다.
 
 ![구별 Best Delta와 데이터 특성 Scorecard](figures/current_algorithm_delta_distribution.png)
 
@@ -995,9 +1142,9 @@ Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. �
 
 아래 그림은 train reward가 아니라, 학습 중 주기적으로 고정 평가일을 다시 실행한 **주기적 평가 return**이다. 실선은 25개 구 평균 Delta, 점선은 중앙값, 음영은 IQR이다.
 
-![REINFORCE/A2C/PPO 학습곡선](figures/current_learning_curves.png)
+![REINFORCE/A2C/PPO/DQN/Bandit 학습곡선](figures/current_learning_curves.png)
 
-학습곡선에서 A2C는 초반에 빠르게 baseline 근처까지 올라온 뒤 비교적 안정적으로 유지된다. REINFORCE는 후반 개선 구간이 있으나 구별 편차가 크다. PPO는 일부 구에서 강하게 개선되지만 Final로 갈수록 정책이 흔들리는 구가 있어 Best/Final 차이가 커진다.
+학습곡선에서 A2C는 초반에 빠르게 baseline 근처까지 올라온 뒤 비교적 안정적으로 유지된다. REINFORCE는 후반 개선 구간이 있으나 구별 편차가 크다. PPO는 일부 구에서 강하게 개선되지만 Final로 갈수록 정책이 흔들리는 구가 있어 Best/Final 차이가 커진다. DQN은 Q-value bootstrapping을 사용하지만, 현재 후보 rank action의 의미가 매 step 바뀌기 때문에 평균적으로 baseline 아래에 머무는 경향이 나타났다. Bandit은 빠르게 수렴하지만, 단기 후보 선택만 학습하기 때문에 지역에 따라 baseline을 넘는 구와 크게 하락하는 구가 함께 나타났다.
 
 ### 8.3 Best 3 / Worst 3 구 분석
 
@@ -1010,6 +1157,10 @@ Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. �
 ![REINFORCE Best/Worst 3 구 학습곡선](figures/current_best_worst_learning_curves_reinforce.png)
 
 ![PPO Best/Worst 3 구 학습곡선](figures/current_best_worst_learning_curves_ppo.png)
+
+![DQN Best/Worst 3 구 학습곡선](figures/current_best_worst_learning_curves_dqn.png)
+
+![Bandit Best/Worst 3 구 학습곡선](figures/current_best_worst_learning_curves_bandit.png)
 
 ### 8.4 서울 지도 시각화
 
@@ -1043,11 +1194,25 @@ Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. �
 
 **PPO**는 clipping과 target KL을 사용하므로 일반적으로 안정적이라고 알려져 있지만, 이번 구조에서는 구별 편차가 컸다. Top-K rank 행동은 매 step마다 행동 index의 의미가 바뀌므로, PPO가 기대하는 완만한 policy update가 항상 좋은 방향으로 누적되지 않을 수 있다. 따라서 PPO는 Best checkpoint와 Final checkpoint를 반드시 함께 봐야 한다.
 
+**DQN**은 Double DQN으로 target action 선택과 target value 평가를 분리하고, Dueling Q-network로 상태 가치와 action advantage를 나누어 추정했다. 그럼에도 평균 Best Delta와 Final Delta가 가장 낮았다. 주된 원인은 세 가지로 해석된다. 첫째, Top-K wrapper에서 action index는 고정 정류소가 아니라 현재 후보 rank이므로 같은 action 번호의 의미가 state마다 바뀐다. 둘째, 재배치 reward는 이동 후 여러 step에 걸쳐 재고 변화로 나타나기 때문에 Q-learning의 TD target이 noisy해진다. 셋째, forecast feature와 이동거리 penalty가 함께 작용하면서 특정 rank의 Q-value가 쉽게 포화되거나 잘못된 후보에 과대평가가 누적될 수 있다. 따라서 현재 설정에서 DQN은 baseline을 넘기보다 action 후보 구조와 reward scale에 더 민감하게 반응했다.
+
+**Contextual Bandit**은 현재 후보 feature와 즉시 reward만 사용하므로 학습이 매우 빠르다. 실제 실행에서도 25개 구 전체를 비교적 짧은 시간에 돌릴 수 있었다. 그러나 이 방법은 다음 state 이후의 재고 변화와 트럭 위치 효과를 장기 return으로 보지 않는다. 따라서 강남구처럼 단기 Top-K 선택만으로 개선되는 구에서는 baseline을 넘을 수 있지만, 강동구처럼 현재 선택이 이후 이동 경로와 재고 균형에 크게 영향을 주는 구에서는 성능이 크게 떨어졌다. 이 결과는 따릉이 재배치가 단순한 후보 선택 문제만은 아니며, 일부 지역에서는 장기 순차 의사결정으로 다루어야 함을 보여준다.
+
 ### 9.3 연구 근거와 연결
 
 자전거 재배치 선행연구들은 station-level demand prediction, inventory target, spatial-temporal feature가 중요하다고 보고한다. 본 실험의 결과도 같은 방향이다. 단순히 RL 알고리즘을 적용하는 것만으로는 baseline을 넘기 어렵고, **미래 수요를 state에 넣고 action 후보를 재구성해야 학습 신호가 살아난다**.
 
-### 9.4 한계
+### 9.4 VAE latent 실험 해석
+
+{vae_line}
+
+{vae_table}
+
+VAE 실험의 의미는 "모든 구에서 성능이 좋아졌다"가 아니라, **latent feature가 어떤 구에서는 수요 패턴을 보완하지만 다른 구에서는 정책 입력을 더 복잡하게 만들어 성능을 낮출 수 있다**는 점이다. 특히 reconstruction 중심 VAE는 수요 패턴을 잘 압축하더라도 reward에 중요한 정보만 골라 압축한다고 보장할 수 없다. DeepMDP 계열 연구가 reward prediction과 next-state prediction을 함께 강조하는 이유도 여기에 있다.
+
+따라서 현재 VAE는 최종 기본 모델이 아니라 추가 ablation으로 해석하는 것이 적절하다. 후속으로는 beta, latent dimension을 바꾸는 단순 튜닝보다, latent가 reward 또는 projected imbalance를 예측하도록 auxiliary loss를 붙이는 방향이 더 타당하다.
+
+### 9.5 한계
 
 현재 실험은 구별 독립 학습이다. 실제 서울 전체 운영에서는 구 경계를 넘는 이동, 트럭 배치 수, depot 위치, 실시간 재고 스냅샷이 함께 고려되어야 한다. 또한 현재 수요예측은 1시간 horizon에 초점을 두므로, 장기 수요 변화와 이벤트성 수요는 충분히 반영하지 못할 수 있다.
 
@@ -1055,7 +1220,7 @@ Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. �
 
 ## 10. 결론 (Conclusion)
 
-현재 25개 구 결과에서 REINFORCE, A2C, PPO를 비교하면, **A2C가 가장 안정적인 선택**이다. REINFORCE는 개선 가능성은 크지만 구별 편차가 있고, PPO는 Best checkpoint 기준 가능성은 있으나 Final 안정성이 약하다.
+현재 25개 구 결과에서 REINFORCE, A2C, PPO, DQN, Bandit을 비교하면, **A2C가 가장 안정적인 선택**이다. REINFORCE는 개선 가능성은 크지만 구별 편차가 있고, PPO는 Best checkpoint 기준 가능성은 있으나 Final 안정성이 약하다. DQN은 Double DQN과 Dueling 구조를 적용했지만 Top-K rank action과 delayed reward 조합에서 Q-value 학습이 충분히 안정화되지 못했다. Bandit은 빠른 진단 모델로는 유용하지만, 전체 문제를 대체하기에는 장기 재배치 효과를 보지 못한다.
 
 이 결과의 함의는 단순히 "어떤 알고리즘이 가장 좋은가"에서 끝나지 않는다. 향후 연구에서는 구별 독립 학습을 넘어 구 간 이동, 트럭 배치 수, depot 위치, 실시간 재고 스냅샷을 함께 반영해야 한다. 또한 Top-K 후보가 실패한 구에서는 후보 생성 점수와 수요예측 coverage를 함께 진단해야 한다.
 
@@ -1074,6 +1239,9 @@ Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. �
 7. Williams, R. J. (1992). Simple statistical gradient-following algorithms for connectionist reinforcement learning. *Machine Learning*.
 8. Sutton, R. S., & Barto, A. G. (2018). *Reinforcement Learning: An Introduction*.
 9. Seoul administrative boundary GeoJSON. https://github.com/southkorea/seoul-maps
+10. Ha, D., & Schmidhuber, J. (2018). World Models. *arXiv:1803.10122*. https://arxiv.org/abs/1803.10122
+11. Hafner, D. et al. (2019). Learning Latent Dynamics for Planning from Pixels. https://planetrl.github.io/
+12. Gelada, C. et al. (2019). DeepMDP: Learning Continuous Latent Space Models for Representation Learning. *ICML*. https://proceedings.mlr.press/v97/gelada19a.html
 
 ---
 
@@ -1098,6 +1266,15 @@ interactive runner에서 알고리즘과 구를 선택하면 다음 공통 설�
 - `candidate_travel_coef = 0.20`
 - `candidate_zone_mode = static3`
 - `bc_epochs = 0`
+
+VAE latent feature 생성은 별도 선행 단계다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+# 메뉴에서 VAE latent 생성 선택 후 구 또는 ALL 선택
+```
+
+생성된 parquet은 `data/vae_latent_by_gu/vae_demand_latent_구이름.parquet` 형식으로 저장된다. 이후 REINFORCE/A2C/PPO/DQN 실행 시 `vae_mode=demand_latent`와 `vae_latent_path`를 지정하면 observation 뒤에 latent feature가 추가된다.
 """
     out_path.write_text(text, encoding="utf-8")
 
@@ -1123,7 +1300,14 @@ def add_table(doc, df: pd.DataFrame, columns: list[tuple[str, str]], font_size: 
                     run.font.size = Pt(font_size)
 
 
-def build_docx(summary: pd.DataFrame, algo_summary: pd.DataFrame, bw: pd.DataFrame, md_path: Path, docx_path: Path) -> None:
+def build_docx(
+    summary: pd.DataFrame,
+    algo_summary: pd.DataFrame,
+    bw: pd.DataFrame,
+    vae_summary: pd.DataFrame,
+    md_path: Path,
+    docx_path: Path,
+) -> None:
     """Markdown과 같은 논문형 구조의 Word/PDF 보고서를 생성한다."""
     from docx import Document
     from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
@@ -1226,10 +1410,29 @@ def build_docx(summary: pd.DataFrame, algo_summary: pd.DataFrame, bw: pd.DataFra
             }
         )
     )
+    vae_line = "VAE 추가 실험 로그가 없어 본문 표에서는 제외했다."
+    vae_focus = pd.DataFrame()
+    if not vae_summary.empty:
+        vae_best_wins = int((vae_summary["best_delta"] > 0).sum())
+        vae_final_wins = int((vae_summary["final_delta"] > 0).sum())
+        vae_mean_best = float(vae_summary["best_delta"].mean())
+        vae_mean_final = float(vae_summary["final_delta"].mean())
+        vae_line = (
+            f"현재 완료된 {len(vae_summary)}개 구 VAE-REINFORCE 실험에서는 Best 기준 {vae_best_wins}개 구, "
+            f"Final 기준 {vae_final_wins}개 구가 baseline을 넘었다. 평균 Best Delta는 {vae_mean_best:+.1f}, "
+            f"평균 Final Delta는 {vae_mean_final:+.1f}였다."
+        )
+        vae_focus = pd.concat(
+            [
+                vae_summary.sort_values("best_delta", ascending=False).head(5).assign(group_type="개선 상위"),
+                vae_summary.sort_values("best_delta", ascending=True).head(5).assign(group_type="하락 상위"),
+            ],
+            ignore_index=True,
+        )
 
     title = doc.add_heading("수요예측 기반 Top-K 후보 구조를 활용한 서울 따릉이 재배치 강화학습", 1)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p = doc.add_paragraph("서울 25개 구 실험에서 A2C가 가장 안정적인 baseline 대비 개선을 보인 정책경사 비교")
+    p = doc.add_paragraph("서울 25개 구 실험에서 A2C가 가장 안정적이었고 Bandit은 단기 후보 선택의 한계를 보여준 알고리즘 비교")
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.runs[0].bold = True
     p.runs[0].font.size = Pt(10)
@@ -1242,7 +1445,7 @@ def build_docx(summary: pd.DataFrame, algo_summary: pd.DataFrame, bw: pd.DataFra
         "본 연구는 서울 25개 구 따릉이 정류소 재배치 문제를 강화학습으로 해결할 수 있는지 검증한다. "
         "재배치 문제는 현재 재고뿐 아니라 앞으로 어느 정류소에서 대여와 반납이 집중될지에 영향을 받는다. "
         "따라서 본 실험에서는 1시간 수요예측 feature를 상태(state)에 추가하고, 매 step마다 수요예측 기반 Top-K 후보 정류소 12개를 구성했다.\n\n"
-        f"비교 알고리즘은 REINFORCE with Value Baseline, A2C, PPO이다. 모든 성능은 고정된 7개 평가일 평균 reward와 MostImbalanced baseline 대비 Delta로 평가했다. "
+        f"비교 알고리즘은 REINFORCE with Value Baseline, A2C, PPO, Double DQN, Contextual Bandit이다. 모든 성능은 고정된 7개 평가일 평균 reward와 MostImbalanced baseline 대비 Delta로 평가했다. "
         f"현재 결과에서 A2C는 평균 Best Delta {mean_best.get('A2C', float('nan')):+.1f}, 평균 Final Delta {mean_final.get('A2C', float('nan')):+.1f}로 가장 안정적이었다. "
         f"전체 최고 단일 결과는 {best_overall['district']} / {best_overall['algorithm']} / Best Delta {best_overall['best_delta']:+.1f}이다."
     )
@@ -1267,7 +1470,9 @@ def build_docx(summary: pd.DataFrame, algo_summary: pd.DataFrame, bw: pd.DataFra
         "공유 자전거 재배치 문제는 vehicle routing, inventory rebalancing, demand forecasting이 결합된 동적 운영 문제로 연구되어 왔다. "
         "Liu et al.(2016)은 multi-source data를 이용해 정류소별 수요와 재고 목표를 함께 고려했고, TAGCN 계열 연구는 graph 구조와 시간 attention을 이용해 정류소별 대여/반납 수요를 예측했다.\n\n"
         "강화학습 기반 재배치 연구에서도 historical usage, weather, station attributes, demand forecast를 상태에 포함하는 방향이 자주 사용된다. "
-        "본 실험은 이 흐름과 맞닿아 있으며, 특히 agent가 볼 수 있는 상태에 미래 수요 정보를 넣고 행동 후보를 줄여 학습 신호를 선명하게 만드는 데 초점을 둔다."
+        "본 실험은 이 흐름과 맞닿아 있으며, 특히 agent가 볼 수 있는 상태에 미래 수요 정보를 넣고 행동 후보를 줄여 학습 신호를 선명하게 만드는 데 초점을 둔다.\n\n"
+        "RL에서 latent representation을 policy 입력으로 쓰는 흐름도 참고했다. World Models는 압축된 환경 feature를 agent 입력으로 사용할 수 있음을 보였고, PlaNet은 latent dynamics를 학습해 latent 공간에서 planning을 수행했다. "
+        "DeepMDP는 단순 복원보다 reward와 다음 latent state를 잘 예측하는 representation이 RL에 더 직접적으로 유용하다는 관점을 제시한다."
     )
 
     doc.add_heading("3. 용어 정리", level=1)
@@ -1346,6 +1551,16 @@ candidate_score =
   - zone_penalty
 """
     )
+    add_body(
+        "추가 실험으로 VAE latent state 보강도 확인했다. VAE는 정책을 직접 학습하는 알고리즘이 아니라, 정류소별 같은 요일/시간대의 과거 수요 profile을 낮은 차원의 latent feature로 압축한 뒤 기존 observation 뒤에 붙이는 표현학습 모듈이다."
+    )
+    add_code_block(
+        """
+input_profile = [rental_mean, return_mean, net_mean, total_mean, net_std]
+z = VAE_encoder(input_profile)
+state_plus = concat(original_state, forecast_features, z)
+"""
+    )
 
     doc.add_heading("6. 알고리즘", level=1)
     doc.add_heading("6.1 REINFORCE with Value Baseline", level=2)
@@ -1381,6 +1596,33 @@ L_clip = min(
 )
 """
     )
+    doc.add_heading("6.4 Double DQN", level=2)
+    add_body(
+        "DQN은 Q-network가 각 action의 가치를 추정하고, replay buffer에서 뽑은 transition으로 TD target을 학습한다. "
+        "본 실험에서는 Q-value 과대추정을 줄이기 위해 Double DQN을 사용했고, 실행 설정에서는 Dueling Q-network도 함께 사용했다. "
+        "평가 reward는 원본 reward 그대로이며, 학습 TD target 안정화를 위해 학습 reward에만 reward_scale=0.01을 적용했다."
+    )
+    add_code_block(
+        """
+a* = argmax_a Q_online(s', a)
+y = r + gamma * Q_target(s', a*)
+loss = Huber(Q_online(s, a), y)
+"""
+    )
+    doc.add_heading("6.5 Contextual Bandit (LinUCB)", level=2)
+    add_body(
+        "Contextual Bandit은 현재 state의 Top-K 후보 feature를 보고, 이번 step에서 어떤 후보를 고를지 학습한다. "
+        "REINFORCE/A2C/PPO/DQN과 달리 다음 state 이후의 장기 return을 직접 bootstrapping하지 않는다. "
+        "본 실험에서는 LinUCB를 사용해 예측 reward와 uncertainty bonus를 함께 고려했다."
+    )
+    add_code_block(
+        """
+theta_a = inv(A_a) b_a
+score_a = theta_a^T x_a + alpha * sqrt(x_a^T inv(A_a) x_a)
+A_a <- A_a + x_a x_a^T
+b_a <- b_a + reward * x_a
+"""
+    )
 
     doc.add_page_break()
     doc.add_heading("7. 실험 설정", level=1)
@@ -1408,6 +1650,8 @@ L_clip = min(
                 ["REINFORCE", "gamma=0.99, hidden=256, lr_policy=3e-4, lr_value=1e-3, normalize_advantages=True"],
                 ["A2C", "gamma=0.99, hidden=256, lr_policy=1e-4, lr_value=3e-4, batch_size=32, memory_size=200"],
                 ["PPO", "gamma=0.99, gae_lambda=0.95, lr=1e-4, clip_range=0.1, ent_coef=0.003, target_kl=0.03"],
+                ["DQN", "Double DQN=True, Dueling=True, masked target Q=True, reward_scale=0.01, eps=0.3->0.02"],
+                ["BANDIT", "LinUCB, alpha=0.5, l2=1.0, reward_scale=0.01"],
             ],
             columns=["algorithm", "params"],
         ),
@@ -1432,7 +1676,7 @@ L_clip = min(
         font_size=7.1,
     )
     add_body(
-        "Figure 1은 기존 막대 분포 대신 구별 scorecard로 구성했다. 왼쪽 세 열은 알고리즘별 Best Delta이고, "
+        "Figure 1은 기존 막대 분포 대신 구별 scorecard로 구성했다. 왼쪽 다섯 열은 알고리즘별 Best Delta이고, "
         "오른쪽은 정류소 수, 전체 수요량, forecast coverage이다. 붉은 셀이 몰린 구는 baseline을 넘지 못한 구이며, "
         "오른쪽 지표를 함께 보면 단순 알고리즘 문제인지, 수요 규모가 큰 구의 reward scale 문제인지, 예측 데이터 coverage가 낮은 문제인지 비교할 수 있다."
     )
@@ -1443,7 +1687,7 @@ L_clip = min(
     doc.add_heading("8.2 학습곡선", level=2)
     add_body("아래 그림은 train reward가 아니라, 학습 중 주기적으로 고정 평가일을 다시 실행한 주기적 평가 return이다. 실선은 25개 구 평균 Delta, 점선은 중앙값, 음영은 IQR이다.")
     doc.add_picture(str(FIG_DIR / "current_learning_curves.png"), width=Inches(6.9))
-    add_caption("Figure 2. REINFORCE/A2C/PPO 주기적 평가 return 학습곡선")
+    add_caption("Figure 2. REINFORCE/A2C/PPO/DQN/Bandit 주기적 평가 return 학습곡선")
 
     doc.add_heading("8.3 Best 3 / Worst 3 구", level=2)
     add_small_table(
@@ -1487,6 +1731,12 @@ L_clip = min(
     doc.add_picture(str(FIG_DIR / "current_best_worst_learning_curves_ppo.png"), width=Inches(7.05))
     add_caption("Figure 3c. PPO Best/Worst 3 구별 학습곡선")
     doc.add_page_break()
+    doc.add_picture(str(FIG_DIR / "current_best_worst_learning_curves_dqn.png"), width=Inches(7.05))
+    add_caption("Figure 3d. DQN Best/Worst 3 구별 학습곡선")
+    doc.add_page_break()
+    doc.add_picture(str(FIG_DIR / "current_best_worst_learning_curves_bandit.png"), width=Inches(7.05))
+    add_caption("Figure 3e. Bandit Best/Worst 3 구별 학습곡선")
+    doc.add_page_break()
 
     doc.add_heading("8.4 서울 지도와 원인 분석", level=2)
     doc.add_picture(str(FIG_DIR / "current_seoul_best_delta_map.png"), width=Inches(5.8))
@@ -1500,13 +1750,39 @@ L_clip = min(
         "특정 시간과 지역에 수요가 강하게 몰리면 Top-K 후보가 실제 문제 정류소를 잘 잡을 때 개선폭이 커진다. 반대로 MostImbalanced가 이미 잘 작동하는 구에서는 RL이 추가로 개선할 여지가 작다.\n\n"
         "A2C는 평균 Best Delta와 Final Delta가 모두 가장 안정적이다. TD 기반 advantage를 사용하기 때문에 episode 전체 reward를 기다리는 REINFORCE보다 업데이트 신호가 빠르고, PPO보다 현재 Top-K rank 행동 구조에 덜 민감하게 작동한 것으로 해석된다.\n\n"
         "REINFORCE는 일부 구에서 큰 개선을 만들지만 Final 안정성이 낮다. Monte Carlo return을 사용하기 때문에 reward 분산이 크고, 구별 수요 패턴에 따라 학습곡선의 흔들림이 커질 수 있다.\n\n"
-        "PPO는 clipping과 target KL을 사용하므로 일반적으로 안정적이라고 알려져 있지만, 이번 구조에서는 구별 편차가 컸다. Top-K rank 행동은 매 step마다 행동 index의 의미가 바뀌므로, PPO가 기대하는 완만한 policy update가 항상 좋은 방향으로 누적되지 않을 수 있다."
+        "PPO는 clipping과 target KL을 사용하므로 일반적으로 안정적이라고 알려져 있지만, 이번 구조에서는 구별 편차가 컸다. Top-K rank 행동은 매 step마다 행동 index의 의미가 바뀌므로, PPO가 기대하는 완만한 policy update가 항상 좋은 방향으로 누적되지 않을 수 있다.\n\n"
+        "DQN은 Double DQN으로 target action 선택과 target value 평가를 분리하고, Dueling Q-network로 상태 가치와 action advantage를 나누어 추정했다. 그럼에도 평균 Best Delta와 Final Delta가 가장 낮았다. 주된 원인은 Top-K rank action의 의미가 state마다 바뀌는 점, 재배치 reward가 여러 step 뒤의 재고 변화로 나타나는 점, forecast feature와 이동거리 penalty가 Q-value target을 noisy하게 만드는 점으로 해석된다.\n\n"
+        "Contextual Bandit은 현재 후보 feature와 즉시 reward만 사용하므로 학습이 매우 빠르다. 그러나 다음 state 이후의 재고 변화와 트럭 위치 효과를 장기 return으로 보지 않는다. 따라서 일부 구에서는 baseline을 넘을 수 있지만, 현재 선택이 이후 이동 경로와 재고 균형에 크게 영향을 주는 구에서는 성능이 크게 떨어졌다. 이 결과는 따릉이 재배치가 단순한 후보 선택 문제만은 아니며, 일부 지역에서는 장기 순차 의사결정으로 다루어야 함을 보여준다."
+    )
+    doc.add_heading("9.1 VAE latent 실험 해석", level=2)
+    add_body(vae_line)
+    if not vae_focus.empty:
+        add_small_table(
+            vae_focus,
+            [
+                ("group_type", "구분"),
+                ("district", "구"),
+                ("baseline_reward", "Baseline"),
+                ("best_reward", "Best"),
+                ("final_reward", "Final"),
+                ("best_delta", "Best Δ"),
+                ("final_delta", "Final Δ"),
+                ("best_episode", "Best ep"),
+            ],
+            font_size=6.5,
+        )
+    add_body(
+        "VAE 실험의 의미는 모든 구에서 성능이 좋아졌다는 것이 아니라, latent feature가 어떤 구에서는 수요 패턴을 보완하지만 다른 구에서는 정책 입력을 더 복잡하게 만들어 성능을 낮출 수 있다는 점이다. "
+        "특히 reconstruction 중심 VAE는 수요 패턴을 잘 압축하더라도 reward에 중요한 정보만 골라 압축한다고 보장할 수 없다. DeepMDP 계열 연구가 reward prediction과 next-state prediction을 함께 강조하는 이유도 여기에 있다.\n\n"
+        "따라서 현재 VAE는 최종 기본 모델이 아니라 추가 ablation으로 해석하는 것이 적절하다. 후속으로는 beta, latent dimension을 바꾸는 단순 튜닝보다, latent가 reward 또는 projected imbalance를 예측하도록 auxiliary loss를 붙이는 방향이 더 타당하다."
     )
 
     doc.add_heading("10. 결론", level=1)
     add_body(
-        "현재 25개 구 결과에서 REINFORCE, A2C, PPO를 비교하면 A2C가 가장 안정적인 선택이다. "
-        "REINFORCE는 개선 가능성은 크지만 구별 편차가 있고, PPO는 Best checkpoint 기준 가능성은 있으나 Final 안정성이 약하다.\n\n"
+        "현재 25개 구 결과에서 REINFORCE, A2C, PPO, DQN, Bandit을 비교하면 A2C가 가장 안정적인 선택이다. "
+        "REINFORCE는 개선 가능성은 크지만 구별 편차가 있고, PPO는 Best checkpoint 기준 가능성은 있으나 Final 안정성이 약하다. "
+        "DQN은 Double DQN과 Dueling 구조를 적용했지만 Top-K rank action과 delayed reward 조합에서 Q-value 학습이 충분히 안정화되지 못했다. "
+        "Bandit은 빠른 진단 모델로는 유용하지만, 전체 문제를 대체하기에는 장기 재배치 효과를 보지 못한다.\n\n"
         "이 결과의 함의는 단순히 어떤 알고리즘이 가장 좋은가에서 끝나지 않는다. 향후 연구에서는 구별 독립 학습을 넘어 구 간 이동, 트럭 배치 수, depot 위치, 실시간 재고 스냅샷을 함께 반영해야 한다. "
         "또한 Top-K 후보가 실패한 구에서는 후보 생성 점수와 수요예측 coverage를 함께 진단해야 한다.\n\n"
         "가장 중요한 결론은 서울 따릉이 재배치 문제에서는 알고리즘 선택만큼 상태와 행동 구조 설계가 중요하다는 점이다. "
@@ -1523,6 +1799,9 @@ L_clip = min(
         "Williams, R. J. (1992). Simple statistical gradient-following algorithms for connectionist reinforcement learning. Machine Learning.",
         "Sutton, R. S., & Barto, A. G. (2018). Reinforcement Learning: An Introduction.",
         "Seoul administrative boundary GeoJSON. https://github.com/southkorea/seoul-maps",
+        "Ha, D., & Schmidhuber, J. (2018). World Models. arXiv:1803.10122.",
+        "Hafner, D. et al. (2019). Learning Latent Dynamics for Planning from Pixels.",
+        "Gelada, C. et al. (2019). DeepMDP: Learning Continuous Latent Space Models for Representation Learning. ICML.",
     ]
     for ref in refs:
         p = doc.add_paragraph(style="List Number")
@@ -1570,6 +1849,9 @@ candidate_mode = forecast_imbalance
 candidate_travel_coef = 0.20
 candidate_zone_mode = static3
 bc_epochs = 0
+
+# VAE latent feature는 interactive runner에서 먼저 생성한다.
+# 생성 파일: data/vae_latent_by_gu/vae_demand_latent_구이름.parquet
 """
     )
 
@@ -1621,9 +1903,10 @@ def main() -> None:
     profiles = collect_profiles(processed_dir, forecast_dir)
     baselines = load_baselines()
     summary, curves = collect_algorithm_results(baselines, profiles)
+    vae_summary = collect_vae_results(baselines)
     algo_summary = algorithm_summary_table(summary)
     bw = best_worst_table(summary)
-    save_csvs(summary, algo_summary, bw, PROJECT_ROOT / "docs")
+    save_csvs(summary, algo_summary, bw, vae_summary, PROJECT_ROOT / "docs")
 
     geojson_path = PROJECT_ROOT / "data" / "seoul_municipalities_geo_simple.json"
     ensure_geojson(geojson_path)
@@ -1634,10 +1917,11 @@ def main() -> None:
     plot_seoul_map(summary, profiles, FIG_DIR / "current_seoul_best_delta_map.png", geojson_path)
     plot_causal_scatter(summary, FIG_DIR / "current_best_worst_causal_scatter.png")
 
-    md_path = PROJECT_ROOT / "docs" / "rl_final_report_easy_2026-06-06.md"
-    build_report(summary, curves, algo_summary, bw, md_path)
-    docx_path = OUT_DIR / "ddareungi_rl_report_easy_2026-06-06.docx"
-    build_docx(summary, algo_summary, bw, md_path, docx_path)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    md_path = PROJECT_ROOT / "docs" / f"rl_final_report_easy_{timestamp}.md"
+    build_report(summary, curves, algo_summary, bw, vae_summary, md_path)
+    docx_path = OUT_DIR / f"ddareungi_rl_report_easy_{timestamp}.docx"
+    build_docx(summary, algo_summary, bw, vae_summary, md_path, docx_path)
     pdf_path = render_pdf(docx_path, OUT_DIR / "rendered_easy")
     print(f"wrote {md_path}")
     print(f"wrote {docx_path}")

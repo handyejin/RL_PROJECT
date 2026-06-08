@@ -7,7 +7,14 @@
 
 | 경로 | 용도 |
 |---|---|
-| `common/` | REINFORCE, A2C, DQN, PPO 학습 core와 공통 helper |
+| `algorithms/reinforce/core.py` | REINFORCE + Value baseline 학습 core |
+| `algorithms/a2c/core.py` | A2C 학습 core |
+| `algorithms/dqn/core.py` | Double/Dueling DQN 학습 core |
+| `algorithms/ppo/core.py` | MaskablePPO 학습 core |
+| `algorithms/bandit/core.py` | Contextual Bandit LinUCB 비교 core |
+| `common/runner_config.py` | interactive/YAML 실행기가 공유하는 경로, 기본값, 명령 생성 helper |
+| `common/candidate_actions.py` | Top-K 후보 action wrapper |
+| `common/future_demand.py`, `common/vae_latent.py` | forecast/VAE state feature wrapper |
 | `run_from_config.py` | `config/ours/*.yaml`을 읽어 실험을 실행하는 권장 실행기 |
 | `run_interactive.py` | 터미널에서 알고리즘/구를 선택하는 보조 실행기 |
 | `export_replay.py` | 학습된 policy의 episode replay JSON 생성 |
@@ -41,6 +48,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_con
 | `config/ours/dqn_topk3.yaml` | DQN | 후보 action을 3개로 줄인 DQN 실험 |
 | `config/ours/dqn_topk12.yaml` | DQN | 기존 Top-K 12 비교용 |
 | `config/ours/ppo_topk12.yaml` | PPO | MaskablePPO 보수적 update 설정 |
+| `config/ours/bandit_topk12.yaml` | Bandit | LinUCB 후보 선택 비교 모델 |
 
 ## 주요 알고리즘 식
 
@@ -76,4 +84,14 @@ PPO는 MaskablePPO를 사용해 action mask와 clipped objective를 함께 적�
 ratio = pi_new(a | s) / pi_old(a | s)
 L_clip = min(ratio * A, clip(ratio, 1-eps, 1+eps) * A)
 loss = -L_clip + value_loss - entropy_bonus
+```
+
+Contextual Bandit은 장기 return을 bootstrap하지 않고, 현재 Top-K 후보의
+feature만 보고 LinUCB score가 가장 큰 후보를 고른다.
+
+```text
+theta_a = inv(A_a) b_a
+score_a = theta_a^T x_a + alpha * sqrt(x_a^T inv(A_a) x_a)
+A_a <- A_a + x_a x_a^T
+b_a <- b_a + reward * x_a
 ```

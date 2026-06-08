@@ -27,7 +27,8 @@ from torch.distributions import Categorical
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.agents.ours.common import a2c_core, reinforce_core  # noqa: E402
+from src.agents.ours.algorithms.a2c import core as a2c_core  # noqa: E402
+from src.agents.ours.algorithms.reinforce import core as reinforce_core  # noqa: E402
 from src.agents.ours.common.candidate_actions import CandidateTopKActionWrapper  # noqa: E402
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override  # noqa: E402
 from src.envs.data_loader import load_episode  # noqa: E402

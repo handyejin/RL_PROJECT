@@ -51,8 +51,8 @@ DQN은 action 후보가 많을수록 Q값 학습이 불안정해질 수 있으�
 |---|---|
 | `src/agents/ours/run_from_config.py` | YAML 설정을 읽어 학습 실행 |
 | `src/agents/ours/run_interactive.py` | 터미널 선택형 실행기 |
-| `src/agents/ours/common/dqn_core.py` | DQN 학습/evaluation core |
-| `src/agents/ours/common/ppo_core.py` | PPO 학습/evaluation core |
+| `src/agents/ours/algorithms/dqn/core.py` | DQN 학습/evaluation core |
+| `src/agents/ours/algorithms/ppo/core.py` | PPO 학습/evaluation core |
 | `src/agents/ours/common/candidate_actions.py` | Top-K 후보 action wrapper |
 | `config/ours/dqn_topk3.yaml` | DQN Top-K 3 권장 설정 |
 | `config/ours/dqn_topk12.yaml` | DQN Top-K 12 비교 설정 |
