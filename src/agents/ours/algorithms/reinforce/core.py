@@ -48,8 +48,10 @@ from src.agents.baselines import get_policy
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
 from src.agents.ours.common.date_split import compute_split
+from src.agents.ours.common.episode_cache import load_episodes_cached
 from src.agents.ours.common.future_demand import build_history_net_profile, maybe_wrap_future_demand
 from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
+from src.agents.ours.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
 from src.envs.data_loader import load_episode
 from src.envs.rebalance_env import RebalanceEnv
 
@@ -172,6 +174,7 @@ def make_env(ep, args: argparse.Namespace, seed: int | None = None, for_eval: bo
     """공통 환경을 만들고, 필요하면 agent-local future wrapper를 적용한다."""
     env = RebalanceEnv(ep, seed=seed, **ENV_KW)
     env = maybe_wrap_future_demand(env, args)
+    env = maybe_wrap_vae_latent(env, args)
     if not for_eval:
         env = maybe_wrap_agent_reward_shaping(env, args)
     return maybe_wrap_candidate_actions(env, args)
@@ -181,14 +184,18 @@ def load_episodes(
     dates: list[str],
     district: str,
     processed_dir: str = "data/processed",
+    cache_dir: str | None = "data/episode_cache",
     progress_label: str | None = None,
 ) -> list:
     """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
-    date_iter = tqdm(dates, desc=progress_label, unit="day") if progress_label else dates
-    return [
-        load_episode(processed_dir, district=district, episode_start=f"{date} 00:00")
-        for date in date_iter
-    ]
+    return load_episodes_cached(
+        dates,
+        district,
+        processed_dir,
+        lambda root, gu, date: load_episode(root, district=gu, episode_start=f"{date} 00:00"),
+        cache_dir=cache_dir,
+        progress_label=progress_label,
+    )
 
 
 def collect_trajectory(
@@ -479,6 +486,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="REINFORCE reward-to-go agent")
     parser.add_argument("--district", default="마포구")
     parser.add_argument("--processed-dir", default="data/processed")
+    parser.add_argument("--episode-cache-dir", default="data/episode_cache")
+    parser.add_argument("--no-episode-cache", action="store_true")
     parser.add_argument("--episodes", type=int, default=200)
     parser.add_argument("--max-num-steps", type=int, default=500)
     parser.add_argument("--n-train-dates", type=int, default=60)
@@ -517,6 +526,9 @@ def parse_args() -> argparse.Namespace:
         default="none",
     )
     parser.add_argument("--future-horizon", type=int, default=6)
+    parser.add_argument("--vae-mode", choices=["none", "demand_latent"], default="none")
+    parser.add_argument("--vae-latent-path", default="")
+    parser.add_argument("--vae-latent-dim", type=int, default=4)
     parser.add_argument("--capacity-path", default="")
     parser.add_argument("--capacity-initial-fill-ratio", type=float, default=0.5)
     parser.add_argument("--forecast-path", default="")
@@ -561,12 +573,14 @@ def main() -> None:
         train_dates_all[: args.n_train_dates],
         args.district,
         args.processed_dir,
+        None if args.no_episode_cache else args.episode_cache_dir,
         f"REINFORCE {args.district} load train" if args.progress else None,
     )
     eval_episodes = load_episodes(
         eval_dates,
         args.district,
         args.processed_dir,
+        None if args.no_episode_cache else args.episode_cache_dir,
         f"REINFORCE {args.district} load eval" if args.progress else None,
     )
     all_episodes = train_episodes + eval_episodes
@@ -577,6 +591,7 @@ def main() -> None:
         args.capacity_initial_fill_ratio,
     )
     forecast_stats = attach_forecast_override(all_episodes, args.forecast_path)
+    vae_stats = attach_vae_latent_override(all_episodes, args.vae_latent_path)
     if args.future_mode in {"history_net", "history_projected_travel"}:
         args.history_profile = build_history_net_profile(train_episodes)
     sample_env = make_env(eval_episodes[0], args)
@@ -623,6 +638,12 @@ def main() -> None:
         print(
             "forecast override: "
             f"matched={int(forecast_stats['forecast_matched'])}/{int(forecast_stats['forecast_total'])}"
+        )
+    if vae_stats:
+        print(
+            "VAE latent override: "
+            f"matched={int(vae_stats['vae_matched'])}/{int(vae_stats['vae_total'])}, "
+            f"latent_dim={int(vae_stats['vae_latent_dim'])}"
         )
     print(f"heuristic mean reward: {heuristic_mean:.2f}")
 

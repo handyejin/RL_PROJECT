@@ -36,8 +36,10 @@ from src.agents.ours.common.bc_utils import collect_bc_data
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
 from src.agents.ours.common.date_split import compute_split
+from src.agents.ours.common.episode_cache import load_episodes_cached
 from src.agents.ours.common.future_demand import maybe_wrap_future_demand
 from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
+from src.agents.ours.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
 # KLtoBC_PPO 는 별도로 src.agents.ppo.MaskablePPO (vanilla SB3 PPO + predict-time mask) 를
 # 상속한다 — ppo_v4 경로에서만 사용.
 from src.agents.ppo_v4 import KLtoBC_PPO
@@ -77,18 +79,29 @@ ENV_KW = dict(
 )
 
 
-def load_episodes(dates: list[str], district: str, processed_dir: str = "data/processed") -> list:
+def load_episodes(
+    dates: list[str],
+    district: str,
+    processed_dir: str = "data/processed",
+    cache_dir: str | None = "data/episode_cache",
+    progress_label: str | None = None,
+) -> list:
     """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
-    return [
-        load_episode(processed_dir, district=district, episode_start=f"{date} 00:00")
-        for date in dates
-    ]
+    return load_episodes_cached(
+        dates,
+        district,
+        processed_dir,
+        lambda root, gu, date: load_episode(root, district=gu, episode_start=f"{date} 00:00"),
+        cache_dir=cache_dir,
+        progress_label=progress_label,
+    )
 
 
 def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_eval: bool = False):
     """공통 환경을 만들고, 필요하면 agent-local forecast wrapper를 적용한다."""
     env = RebalanceEnv(episodes, seed=seed, **ENV_KW)
     env = maybe_wrap_future_demand(env, args)
+    env = maybe_wrap_vae_latent(env, args)
     if not for_eval:
         env = maybe_wrap_agent_reward_shaping(env, args)
     return maybe_wrap_candidate_actions(env, args)
@@ -206,11 +219,14 @@ def parse_args() -> argparse.Namespace:
                         help="ppo_v4 전용 — KL-to-BC penalty 계수")
     parser.add_argument("--district", default="마포구")
     parser.add_argument("--processed-dir", default="data/processed")
+    parser.add_argument("--episode-cache-dir", default="data/episode_cache")
+    parser.add_argument("--no-episode-cache", action="store_true")
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--total-timesteps", type=int, default=50_000)
     parser.add_argument("--eval-every", type=int, default=10_000)
     parser.add_argument("--tag", default="ppo")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--progress", action="store_true")
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
@@ -241,6 +257,9 @@ def parse_args() -> argparse.Namespace:
         default="none",
     )
     parser.add_argument("--future-horizon", type=int, default=6)
+    parser.add_argument("--vae-mode", choices=["none", "demand_latent"], default="none")
+    parser.add_argument("--vae-latent-path", default="")
+    parser.add_argument("--vae-latent-dim", type=int, default=4)
     parser.add_argument("--capacity-path", default="")
     parser.add_argument("--capacity-initial-fill-ratio", type=float, default=0.5)
     parser.add_argument("--forecast-path", default="")
@@ -270,8 +289,25 @@ def main() -> None:
     """MaskablePPO 학습 루프와 주기적 7일 평가, best/final 저장을 실행한다."""
     args = parse_args()
     train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
-    train_episodes = load_episodes(train_dates_all[: args.n_train_dates], args.district, args.processed_dir)
-    eval_episodes = load_episodes(eval_dates, args.district, args.processed_dir)
+    print(
+        f"[PPO:{args.district}] split={args.split_mode} loading episodes "
+        f"(train={args.n_train_dates}, eval={len(eval_dates)})...",
+        flush=True,
+    )
+    train_episodes = load_episodes(
+        train_dates_all[: args.n_train_dates],
+        args.district,
+        args.processed_dir,
+        None if args.no_episode_cache else args.episode_cache_dir,
+        f"PPO {args.district} load train" if args.progress else None,
+    )
+    eval_episodes = load_episodes(
+        eval_dates,
+        args.district,
+        args.processed_dir,
+        None if args.no_episode_cache else args.episode_cache_dir,
+        f"PPO {args.district} load eval" if args.progress else None,
+    )
     all_episodes = train_episodes + eval_episodes
 
     capacity_stats = apply_capacity_override(
@@ -280,6 +316,7 @@ def main() -> None:
         args.capacity_initial_fill_ratio,
     )
     forecast_stats = attach_forecast_override(all_episodes, args.forecast_path)
+    vae_stats = attach_vae_latent_override(all_episodes, args.vae_latent_path)
 
     train_env = DummyVecEnv([lambda: make_env(train_episodes, args, seed=args.seed)])
     sample_env = make_env(eval_episodes[0], args, seed=args.seed)
@@ -303,6 +340,12 @@ def main() -> None:
         print(
             "forecast override: "
             f"matched={int(forecast_stats['forecast_matched'])}/{int(forecast_stats['forecast_total'])}"
+        )
+    if vae_stats:
+        print(
+            "VAE latent override: "
+            f"matched={int(vae_stats['vae_matched'])}/{int(vae_stats['vae_total'])}, "
+            f"latent_dim={int(vae_stats['vae_latent_dim'])}"
         )
     print(f"heuristic mean reward: {heuristic_mean:.2f}")
 
