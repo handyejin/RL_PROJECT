@@ -46,6 +46,24 @@ EXPERIMENTS = {
 }
 
 
+def dataframe_to_markdown(df: pd.DataFrame) -> str:
+    """추가 패키지 없이 DataFrame을 Markdown 표 문자열로 변환한다."""
+    columns = [str(col) for col in df.columns]
+    rows = [[str(value) for value in row] for row in df.to_numpy()]
+    widths = [
+        max(len(columns[idx]), *(len(row[idx]) for row in rows)) if rows else len(columns[idx])
+        for idx in range(len(columns))
+    ]
+
+    def fmt_row(values: list[str]) -> str:
+        return "| " + " | ".join(value.ljust(widths[idx]) for idx, value in enumerate(values)) + " |"
+
+    header = fmt_row(columns)
+    separator = "| " + " | ".join("-" * width for width in widths) + " |"
+    body = [fmt_row(row) for row in rows]
+    return "\n".join([header, separator, *body])
+
+
 def subprocess_env() -> dict[str, str]:
     """학습 subprocess용 환경변수."""
     env = os.environ.copy()
@@ -186,7 +204,7 @@ def summarize(rows: list[dict], out_prefix: Path) -> None:
         "",
         "지표: 7개 평가일 평균 reward의 MostImbalanced baseline 대비 Delta",
         "",
-        display.to_markdown(index=False),
+        dataframe_to_markdown(display),
         "",
         f"- detail: `{detail_path.relative_to(ROOT)}`",
         f"- summary: `{summary_path.relative_to(ROOT)}`",
