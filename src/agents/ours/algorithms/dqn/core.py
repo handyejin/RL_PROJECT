@@ -58,10 +58,9 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.agents.ours.common.bc_utils import collect_bc_data
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
+from src.agents.ours.common.date_split import compute_split
 from src.agents.ours.common.experiment_utils import (
     ENV_KW,
-    EVAL_DATES,
-    TRAIN_DATES,
     evaluate_most_imbalanced as evaluate_heuristic,
     load_rebalance_episodes as load_episodes,
     print_eval_table,
@@ -338,6 +337,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episode-cache-dir", default="data/episode_cache")
     parser.add_argument("--no-episode-cache", action="store_true")
     parser.add_argument("--n-train-dates", type=int, default=200)
+    parser.add_argument(
+        "--split-mode",
+        choices=["random", "chronological"],
+        default="random",
+        help="random: seed=42 셔플 후 80/20, chronological: 시간순 80/20 (계절 OOD 평가)",
+    )
     parser.add_argument("--total-timesteps", type=int, default=50_000)
     parser.add_argument("--eval-every", type=int, default=10_000)
     parser.add_argument("--tag", default="dqn_forecast_capacity")
@@ -399,15 +404,21 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """MaskableDQN을 생성하고 주기적 7일 평가로 best/final 모델을 저장한다."""
     args = parse_args()
+    train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
+    print(
+        f"[DQN:{args.district}] split={args.split_mode} loading episodes "
+        f"(train={args.n_train_dates}, eval={len(eval_dates)})...",
+        flush=True,
+    )
     train_episodes = load_episodes(
-        TRAIN_DATES[: args.n_train_dates],
+        train_dates_all[: args.n_train_dates],
         args.district,
         args.processed_dir,
         None if args.no_episode_cache else args.episode_cache_dir,
         f"DQN {args.district} load train" if args.progress else None,
     )
     eval_episodes = load_episodes(
-        EVAL_DATES,
+        eval_dates,
         args.district,
         args.processed_dir,
         None if args.no_episode_cache else args.episode_cache_dir,
@@ -506,7 +517,7 @@ def main() -> None:
         final_mean, final_rewards = evaluate(model, eval_episodes, args, args.seed)
         model.save(out_dir / "final_model")
         np.save(out_dir / "history.npy", np.asarray(history or [{"timesteps": 0, "eval_reward": final_mean}], dtype=object))
-        print_eval_table("dqn_bc_only", heuristic_rewards, final_rewards)
+        print_eval_table("dqn_bc_only", heuristic_rewards, final_rewards, eval_dates)
         return
 
     steps_done = 0
@@ -565,7 +576,7 @@ def main() -> None:
 
     print(f"best reward: {best_reward:.2f} at timesteps {best_step}")
     print(f"final reward: {final_mean:.2f}")
-    print_eval_table("dqn_best", heuristic_rewards, best_rewards)
+    print_eval_table("dqn_best", heuristic_rewards, best_rewards, eval_dates)
 
 
 if __name__ == "__main__":

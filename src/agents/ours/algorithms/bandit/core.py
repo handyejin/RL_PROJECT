@@ -49,10 +49,9 @@ from tqdm.auto import tqdm
 
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
+from src.agents.ours.common.date_split import compute_split
 from src.agents.ours.common.experiment_utils import (
     ENV_KW,
-    EVAL_DATES,
-    TRAIN_DATES,
     evaluate_most_imbalanced as evaluate_heuristic,
     load_rebalance_episodes as load_episodes,
     print_eval_table,
@@ -187,6 +186,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--total-timesteps", type=int, default=170_000)
     parser.add_argument("--max-num-steps", type=int, default=500)
     parser.add_argument("--n-train-dates", type=int, default=60)
+    parser.add_argument(
+        "--split-mode",
+        choices=["random", "chronological"],
+        default="random",
+        help="random: seed=42 셔플 후 80/20, chronological: 시간순 80/20 (계절 OOD 평가)",
+    )
     parser.add_argument("--eval-every", type=int, default=20_000)
     parser.add_argument("--progress", action="store_true")
     parser.add_argument("--tag", default="bandit")
@@ -233,20 +238,21 @@ def main() -> None:
     if args.bc_epochs:
         print("Contextual Bandit은 BC를 사용하지 않으므로 --bc-epochs 값은 무시합니다.")
 
+    train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
     print(
-        f"[BANDIT:{args.district}] loading episodes "
-        f"(train={args.n_train_dates}, eval={len(EVAL_DATES)})...",
+        f"[BANDIT:{args.district}] split={args.split_mode} loading episodes "
+        f"(train={args.n_train_dates}, eval={len(eval_dates)})...",
         flush=True,
     )
     train_episodes = load_episodes(
-        TRAIN_DATES[: args.n_train_dates],
+        train_dates_all[: args.n_train_dates],
         args.district,
         args.processed_dir,
         None if args.no_episode_cache else args.episode_cache_dir,
         f"BANDIT {args.district} load train" if args.progress else None,
     )
     eval_episodes = load_episodes(
-        EVAL_DATES,
+        eval_dates,
         args.district,
         args.processed_dir,
         None if args.no_episode_cache else args.episode_cache_dir,
@@ -355,8 +361,8 @@ def main() -> None:
     best_mean, best_rewards = evaluate(policy, eval_episodes, args, args.seed)
     print(f"best reward: {best_mean:.2f} at timesteps {best_step}")
     print(f"final reward: {final_mean:.2f}")
-    print_eval_table("bandit_best", heuristic_rewards, best_rewards)
-    print_eval_table("bandit_final", heuristic_rewards, final_rewards)
+    print_eval_table("bandit_best", heuristic_rewards, best_rewards, eval_dates)
+    print_eval_table("bandit_final", heuristic_rewards, final_rewards, eval_dates)
 
 
 if __name__ == "__main__":

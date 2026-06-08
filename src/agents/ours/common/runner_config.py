@@ -65,6 +65,7 @@ DEFAULT_RUNNER_VALUES: dict[str, Any] = {
     "eval_every": 50,
     "eval_every_timesteps": 20_000,
     "n_train_dates": 200,
+    "split_mode": "random",
     "bc_epochs": 0,
     "future_mode": "forecast_projected_travel",
     "future_horizon": 6,
@@ -205,13 +206,23 @@ def build_training_command(args: Any, district: str) -> list[str]:
     ]
 
     if args.algorithm in {"reinforce", "a2c"}:
-        cmd += ["--episodes", str(args.episodes), "--eval-every", str(args.eval_every), "--normalize-advantages"]
+        cmd += [
+            "--episodes",
+            str(args.episodes),
+            "--eval-every",
+            str(args.eval_every),
+            "--split-mode",
+            args.split_mode,
+            "--normalize-advantages",
+        ]
     else:
         cmd += ["--total-timesteps", str(args.total_timesteps), "--eval-every", str(args.eval_every_timesteps)]
 
     if args.algorithm == "dqn":
         # 학습 로그와 재현 가이드에서 Double/Dueling DQN 설정이 명확히 드러나도록 명시한다.
         cmd += [
+            "--split-mode",
+            args.split_mode,
             "--double-q",
             "--dueling-q",
             "--dqn-reward-scale",
@@ -227,6 +238,8 @@ def build_training_command(args: Any, district: str) -> list[str]:
     if args.algorithm == "ppo":
         # Top-K rank action은 state마다 의미가 바뀌므로 PPO update를 보수적으로 제한한다.
         cmd += [
+            "--split-mode",
+            args.split_mode,
             "--learning-rate",
             str(args.ppo_learning_rate),
             "--ent-coef",
@@ -245,6 +258,8 @@ def build_training_command(args: Any, district: str) -> list[str]:
 
     if args.algorithm == "bandit":
         cmd += [
+            "--split-mode",
+            args.split_mode,
             "--bandit-alpha",
             str(args.bandit_alpha),
             "--bandit-l2",

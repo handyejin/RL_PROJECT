@@ -89,11 +89,17 @@ def evaluate_most_imbalanced(episodes: list, seed: int) -> tuple[float, list[flo
     return float(np.mean(rewards)), rewards
 
 
-def print_eval_table(label: str, heuristic_rewards: list[float], model_rewards: list[float]) -> None:
+def print_eval_table(
+    label: str,
+    heuristic_rewards: list[float],
+    model_rewards: list[float],
+    eval_dates: list[str] | None = None,
+) -> None:
     """고정 7일 평가 결과를 baseline과 나란히 출력한다."""
+    dates = eval_dates or EVAL_DATES
     print(f"\n=== {label} vs 휴리스틱 (7일) ===")
     print(f"{'날짜':12}{'휴리스틱':>10}{'모델':>10}{'Δ(M-휴)':>9}")
-    for date, h, r in zip(EVAL_DATES, heuristic_rewards, model_rewards):
+    for date, h, r in zip(dates, heuristic_rewards, model_rewards):
         print(f"{date:12}{h:>10.1f}{r:>10.1f}{r - h:>9.1f}")
     print(
         f"{'평균':12}{np.mean(heuristic_rewards):>10.1f}{np.mean(model_rewards):>10.1f}"
