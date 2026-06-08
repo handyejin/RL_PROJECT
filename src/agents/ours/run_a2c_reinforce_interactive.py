@@ -115,7 +115,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=DEFAULT_RUNNER_VALUES["episodes"])
     parser.add_argument("--eval-every", type=int, default=DEFAULT_RUNNER_VALUES["eval_every"])
     parser.add_argument("--n-train-dates", type=int, default=DEFAULT_RUNNER_VALUES["n_train_dates"])
-    parser.add_argument("--split-mode", choices=["random", "chronological"], default=DEFAULT_RUNNER_VALUES["split_mode"])
+    parser.add_argument(
+        "--split-mode",
+        choices=["random", "chronological"],
+        default="chronological",
+        help="팀 최종 기준은 chronological train/test split이다.",
+    )
     parser.add_argument("--seed", type=int, default=DEFAULT_RUNNER_VALUES["seed"])
     parser.add_argument("--base-seed", type=int, default=42)
     parser.add_argument("--additional-seeds", default="123,777")
@@ -199,6 +204,13 @@ def run_vae(args: argparse.Namespace) -> None:
 
 def run_seed_sensitivity(args: argparse.Namespace) -> None:
     """Best/Worst 3구에 seed 123/777을 추가 실행하고 요약 파일을 만든다."""
+    if args.split_mode == "chronological" and args.use_existing_seed42:
+        print(
+            "\n주의: chronological split에서는 기존 random seed42 full run을 재사용하지 않습니다.\n"
+            "먼저 A2C/REINFORCE 전체 25개 구를 --split-mode chronological --seed 42로 학습한 뒤,\n"
+            "seed 반복 실험을 실행하세요. seed42도 Best/Worst 3구만 새로 돌리려면 --no-use-existing-seed42를 붙이세요.",
+            flush=True,
+        )
     print("\n실행 작업: Best/Worst 3구 seed 반복 실험", flush=True)
     print("대상: A2C Best/Worst 3구 + REINFORCE Best/Worst 3구", flush=True)
     print(f"base_seed={args.base_seed} 기존 full run 재사용, additional_seeds={args.additional_seeds}", flush=True)

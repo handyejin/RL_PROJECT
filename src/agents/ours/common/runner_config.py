@@ -158,6 +158,9 @@ def build_training_command(args: Any, district: str) -> list[str]:
     vae_latent_path = project_path(args.vae_latent_dir) / f"vae_demand_latent_{district}.parquet"
     topk_label = f"topk{args.candidate_top_k}"
     tag_parts = [args.tag]
+    split_label = getattr(args, "split_mode", "random")
+    if split_label != "random" and split_label not in args.tag:
+        tag_parts.append(split_label)
     if topk_label not in args.tag:
         tag_parts.append(topk_label)
     tag_parts.extend([args.algorithm, district])

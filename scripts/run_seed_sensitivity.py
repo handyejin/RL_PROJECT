@@ -78,7 +78,8 @@ def subprocess_env() -> dict[str, str]:
 def build_cmd(algorithm: str, district: str, seed: int, args: argparse.Namespace) -> list[str]:
     """알고리즘 core 실행 명령을 만든다."""
     module = EXPERIMENTS[algorithm]["module"]
-    tag = f"seedci_{algorithm}_{district}_s{seed}"
+    split_part = "" if args.split_mode == "random" else f"{args.split_mode}_"
+    tag = f"seedci_{split_part}{algorithm}_{district}_s{seed}"
     return [
         sys.executable,
         "-m",
@@ -128,16 +129,22 @@ def build_cmd(algorithm: str, district: str, seed: int, args: argparse.Namespace
     ]
 
 
-def history_path(algorithm: str, district: str, seed: int) -> Path:
+def history_path(algorithm: str, district: str, seed: int, args: argparse.Namespace) -> Path:
     """core가 저장하는 history.npy 경로를 계산한다."""
     prefix = EXPERIMENTS[algorithm]["log_prefix"]
-    tag = f"seedci_{algorithm}_{district}_s{seed}"
+    split_part = "" if args.split_mode == "random" else f"{args.split_mode}_"
+    tag = f"seedci_{split_part}{algorithm}_{district}_s{seed}"
     return ROOT / "logs" / f"{prefix}_{tag}" / "history.npy"
 
 
-def base_history_paths(algorithm: str, district: str) -> list[Path]:
+def base_history_paths(algorithm: str, district: str, args: argparse.Namespace) -> list[Path]:
     """서울 25개 구 seed 42 full run에서 생성된 history.npy 후보 경로들."""
     prefix = EXPERIMENTS[algorithm]["log_prefix"]
+    if args.split_mode != "random":
+        return [
+            ROOT / "logs" / f"{prefix}_interactive_{args.split_mode}_topk12_{algorithm}_{district}" / "history.npy",
+            ROOT / "logs" / f"{prefix}_seedci_{args.split_mode}_{algorithm}_{district}_s42" / "history.npy",
+        ]
     return [
         ROOT / "logs" / f"{prefix}_interactive_topk12_{algorithm}_{district}" / "history.npy",
         ROOT / "logs" / f"{prefix}_interactive_{algorithm}_{district}" / "history.npy",
@@ -152,11 +159,11 @@ def result_path(algorithm: str, district: str, seed: int, args: argparse.Namespa
     이 스크립트가 만든 `seedci_*_s{seed}` 로그를 읽는다.
     """
     if args.use_existing_seed42 and seed == args.base_seed:
-        for path in base_history_paths(algorithm, district):
+        for path in base_history_paths(algorithm, district, args):
             if path.exists():
                 return path
-        return base_history_paths(algorithm, district)[0]
-    return history_path(algorithm, district, seed)
+        return base_history_paths(algorithm, district, args)[0]
+    return history_path(algorithm, district, seed, args)
 
 
 def read_result(algorithm: str, group: str, district: str, seed: int, baseline: float, args: argparse.Namespace) -> dict:
@@ -245,7 +252,13 @@ def summarize(rows: list[dict], out_prefix: Path, args: argparse.Namespace) -> N
         "",
         f"Seed: {', '.join(map(str, sorted(detail['seed'].unique())))}",
         "",
-        f"seed {args.base_seed}는 서울 전체 full run 로그를 재사용하고, 추가 seed만 별도 학습했다.",
+        f"split mode: `{args.split_mode}`",
+        "",
+        (
+            f"seed {args.base_seed}는 서울 전체 full run 로그를 재사용하고, 추가 seed만 별도 학습했다."
+            if args.use_existing_seed42
+            else f"seed {args.base_seed}도 Best/Worst 대상 구에서 함께 새로 학습했다."
+        ),
         "",
         "지표: 7개 평가일 평균 reward의 MostImbalanced baseline 대비 Delta",
         "",
@@ -267,7 +280,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--candidate-top-k", type=int, default=12)
     parser.add_argument("--device", choices=["cpu", "mps"], default="cpu")
-    parser.add_argument("--split-mode", choices=["random", "chronological"], default="random")
+    parser.add_argument("--split-mode", choices=["random", "chronological"], default="chronological")
     parser.add_argument("--base-seed", type=int, default=DEFAULT_BASE_SEED)
     parser.add_argument(
         "--additional-seeds",
@@ -293,6 +306,23 @@ def main() -> None:
     baselines = pd.read_csv(ROOT / "docs" / "rl_current_gu_algorithm_summary.csv")
     baseline_by_district = baselines.drop_duplicates("district").set_index("district")["baseline_reward"].to_dict()
 
+    if args.use_existing_seed42 and not args.dry_run:
+        missing_base = []
+        for algorithm, spec in EXPERIMENTS.items():
+            for group in ["best", "worst"]:
+                for district in spec[group]:
+                    if not result_path(algorithm, district, args.base_seed, args).exists():
+                        missing_base.append(result_path(algorithm, district, args.base_seed, args).relative_to(ROOT))
+        if missing_base:
+            print("\nseed 42 base 로그가 없습니다. 현재 split 기준으로 먼저 full run을 실행하세요.", flush=True)
+            print(f"split_mode={args.split_mode}", flush=True)
+            for path in missing_base[:12]:
+                print(f"  - {path}", flush=True)
+            if len(missing_base) > 12:
+                print(f"  ... and {len(missing_base) - 12} more", flush=True)
+            print("\n대안: seed42도 Best/Worst 구만 새로 돌리려면 --no-use-existing-seed42를 사용하세요.", flush=True)
+            raise SystemExit(2)
+
     total = sum((len(spec["best"]) + len(spec["worst"])) * len(seeds_to_run) for spec in EXPERIMENTS.values())
     run_index = 0
     for algorithm, spec in EXPERIMENTS.items():
@@ -300,7 +330,7 @@ def main() -> None:
             for district in spec[group]:
                 for seed in seeds_to_run:
                     run_index += 1
-                    path = history_path(algorithm, district, seed)
+                    path = history_path(algorithm, district, seed, args)
                     print("\n" + "=" * 80, flush=True)
                     print(f"[{run_index}/{total}] {algorithm.upper()} {group} {district} seed={seed}", flush=True)
                     if args.skip_existing and path.exists():
