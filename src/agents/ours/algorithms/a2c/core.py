@@ -420,7 +420,7 @@ def pretrain_behavior_cloning(
         val_reward = None
         if val_episodes:
             # BC validation은 teacher label 정확도 대신 실제 환경 reward로 본다.
-            val_reward, _ = evaluate(policy, val_episodes, args, device, args.seed)
+            val_reward, _ = evaluate(policy, val_episodes, args, device, args.eval_seed)
             if val_reward > best_val_reward:
                 best_val_reward = val_reward
                 best_epoch = epoch + 1
@@ -483,6 +483,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--progress", action="store_true")
     parser.add_argument("--tag", default="run1")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--eval-seed", type=int, default=42)
     parser.add_argument("--hidden", type=int, default=256)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--lr-policy", type=float, default=1e-4)
@@ -540,6 +541,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """데이터 준비부터 BC 선택 적용, A2C 학습, best/final 평가까지 수행한다."""
     args = parse_args()
+    # seed는 학습 날짜 샘플링, action sampling, network 초기화가 같은 조건에서
+    # 재현되도록 만드는 난수 시작값이다. seed 민감도 실험에서는 이 값만 바꾼다.
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.backends.mps.is_available():
+        torch.mps.manual_seed(args.seed)
     device = torch.device("mps" if args.device == "auto" and torch.backends.mps.is_available() else "cpu")
     if args.device in {"cpu", "mps"}:
         device = torch.device(args.device)
@@ -612,7 +620,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     best_dir.mkdir(parents=True, exist_ok=True)
 
-    heuristic_mean, heuristic_rewards = evaluate_heuristic(eval_episodes, args.seed)
+    heuristic_mean, heuristic_rewards = evaluate_heuristic(eval_episodes, args.eval_seed)
     history = []
     best_reward = -np.inf
     best_episode = 0
@@ -655,7 +663,7 @@ def main() -> None:
                 f"BC best validation: epoch={int(bc_stats['bc_best_epoch'])}, "
                 f"reward={bc_stats['bc_best_val_reward']:.2f}"
             )
-        eval_reward, _ = evaluate(policy, eval_episodes, args, device, args.seed)
+        eval_reward, _ = evaluate(policy, eval_episodes, args, device, args.eval_seed)
         history.append({"episode": 0, "eval_reward": eval_reward, "stage": "bc"})
         best_reward = eval_reward
         best_state = {
@@ -666,7 +674,7 @@ def main() -> None:
         print(f"episode={0:4d} eval={eval_reward:8.2f} stage=BC")
 
     if args.bc_only or args.episodes <= 0:
-        final_mean, final_rewards = evaluate(policy, eval_episodes, args, device, args.seed)
+        final_mean, final_rewards = evaluate(policy, eval_episodes, args, device, args.eval_seed)
         torch.save({"policy": policy.state_dict(), "value": value.state_dict()}, out_dir / "actor_critic_final.pt")
         np.save(out_dir / "history.npy", np.asarray(history or [{"episode": 0, "eval_reward": final_mean}], dtype=object))
         print_eval_table("a2c_bc_only", heuristic_rewards, final_rewards)
@@ -701,7 +709,7 @@ def main() -> None:
         )
 
         if episode == 1 or episode % args.eval_every == 0:
-            eval_reward, _ = evaluate(policy, eval_episodes, args, device, args.seed)
+            eval_reward, _ = evaluate(policy, eval_episodes, args, device, args.eval_seed)
             history.append(
                 {
                     "episode": episode,
@@ -740,7 +748,7 @@ def main() -> None:
             else:
                 print(message)
 
-    final_mean, final_rewards = evaluate(policy, eval_episodes, args, device, args.seed)
+    final_mean, final_rewards = evaluate(policy, eval_episodes, args, device, args.eval_seed)
     if not history or abs(float(history[-1]["eval_reward"]) - final_mean) > 1e-9:
         # 마지막 평가 주기와 학습 종료 시점이 다르면 final 값을 별도 기록한다.
         history.append({"episode": episode, "eval_reward": final_mean, "stage": "final"})
@@ -748,7 +756,7 @@ def main() -> None:
     np.save(out_dir / "history.npy", np.asarray(history, dtype=object))
     policy.load_state_dict(best_state["policy"])
     value.load_state_dict(best_state["value"])
-    best_mean, best_rewards = evaluate(policy, eval_episodes, args, device, args.seed)
+    best_mean, best_rewards = evaluate(policy, eval_episodes, args, device, args.eval_seed)
     print(f"best reward: {best_reward:.2f} at episode {best_episode}")
     print(f"final reward: {final_mean:.2f}")
     print_eval_table("a2c_best", heuristic_rewards, best_rewards)

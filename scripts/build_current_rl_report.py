@@ -200,6 +200,14 @@ def collect_algorithm_results(baselines: pd.DataFrame, profiles: pd.DataFrame) -
                     }
                 )
     summary = pd.DataFrame(summary_rows).merge(profiles, on="district", how="left")
+    summary["best_delta_pct"] = 100 * summary["best_delta"] / summary["baseline_reward"].abs().replace(0, np.nan)
+    summary["final_delta_pct"] = 100 * summary["final_delta"] / summary["baseline_reward"].abs().replace(0, np.nan)
+    summary["best_point"] = summary.apply(
+        lambda row: f"{int(row['best_step'])} ep"
+        if row["algorithm"] in {"REINFORCE", "A2C"}
+        else f"{int(row['best_step']):,} step",
+        axis=1,
+    )
     curves = pd.DataFrame(curve_rows)
     return summary, curves
 
@@ -230,7 +238,10 @@ def collect_vae_results(baselines: pd.DataFrame) -> pd.DataFrame:
                 "final_reward": rewards[final_idx],
                 "best_delta": rewards[best_idx] - baseline,
                 "final_delta": rewards[final_idx] - baseline,
+                "best_delta_pct": 100 * (rewards[best_idx] - baseline) / abs(baseline) if baseline else np.nan,
+                "final_delta_pct": 100 * (rewards[final_idx] - baseline) / abs(baseline) if baseline else np.nan,
                 "best_episode": episodes[best_idx],
+                "best_point": f"{int(episodes[best_idx])} ep",
                 "n_eval_points": len(history),
             }
         )
@@ -250,6 +261,9 @@ def algorithm_summary_table(summary: pd.DataFrame) -> pd.DataFrame:
                 "mean_best_delta": float(group["best_delta"].mean()),
                 "median_best_delta": float(group["best_delta"].median()),
                 "mean_final_delta": float(group["final_delta"].mean()),
+                "mean_best_delta_pct": float(group["best_delta_pct"].mean()),
+                "median_best_delta_pct": float(group["best_delta_pct"].median()),
+                "mean_final_delta_pct": float(group["final_delta_pct"].mean()),
                 "mean_best_reward": float(group["best_reward"].mean()),
                 "mean_final_reward": float(group["final_reward"].mean()),
             }
@@ -332,21 +346,21 @@ def plot_algorithm_distribution(summary: pd.DataFrame, path: Path) -> None:
     y = np.arange(len(order))
     ax_station.barh(y, station_vals, color="#94A3B8", alpha=0.82)
     ax_station.scatter(station_vals, y, s=np.clip(active_ratio * 40, 8, 38), color="#334155", zorder=3)
+    station_max = float(np.nanmax(station_vals)) if len(station_vals) else 1.0
+    ax_station.set_xlim(0, station_max * 1.28)
     ax_station.set_title("정류소\n(active 점)", fontsize=10, fontweight="bold")
     ax_station.set_xlabel("count", fontsize=8)
     ax_station.grid(axis="x", alpha=0.35)
     ax_station.tick_params(axis="y", left=False, labelleft=False)
-    for idx in [0, len(order) - 1]:
-        ax_station.text(station_vals[idx], idx, f" {int(station_vals[idx])}", va="center", fontsize=7)
 
     demand_m = meta["demand_volume"].to_numpy(dtype=float) / 1_000_000
     ax_demand.barh(y, demand_m, color="#A78BFA", alpha=0.78)
+    demand_max = float(np.nanmax(demand_m)) if len(demand_m) else 1.0
+    ax_demand.set_xlim(0, demand_max * 1.28)
     ax_demand.set_title("대여+반납\n수요량", fontsize=10, fontweight="bold")
     ax_demand.set_xlabel("million rows", fontsize=8)
     ax_demand.grid(axis="x", alpha=0.35)
     ax_demand.tick_params(axis="y", left=False, labelleft=False)
-    for idx in [int(np.nanargmax(demand_m)), int(np.nanargmin(demand_m))]:
-        ax_demand.text(demand_m[idx], idx, f" {demand_m[idx]:.1f}M", va="center", fontsize=7)
 
     coverage = (meta["forecast_station_coverage"].fillna(0).to_numpy(dtype=float) * 100).clip(0, 100)
     colors = ["#16A34A" if c >= 85 else ("#F59E0B" if c >= 70 else "#DC2626") for c in coverage]
@@ -712,6 +726,45 @@ def md_table(df: pd.DataFrame, columns: list[tuple[str, str]], digits: int = 1) 
     return "\n".join(lines)
 
 
+REPORT_SUBTITLE = (
+    "서울 25개 구 실험에서 A2C가 가장 안정적이며, "
+    "DQN은 rank action 학습 난이도, Bandit은 단기 선택 모델의 구조적 한계를 보인 알고리즘 비교"
+)
+
+
+def protocol_scope_text() -> str:
+    """현재 보고서가 다루는 실험 범위를 명확히 한다."""
+    return (
+        "본 보고서는 이전 단일구 탐색 결과를 최종 비교에 포함하지 않고, 현재 전처리 데이터와 "
+        "구별 수요예측 파일을 기준으로 서울 25개 구를 다시 학습한 결과만 다룬다. 따라서 모든 표와 그림은 "
+        "현재 25개 구 protocol 안에서 서로 비교한다."
+    )
+
+
+def topk_ablation_note_text() -> str:
+    """Top-K 인과 주장에 대한 범위와 한계를 명확히 한다."""
+    return (
+        "현재 25개 구 본문 결과는 모두 수요예측 기반 Top-K 후보 구조를 적용한 후의 결과다. "
+        "즉, 25개 구 전체에 대해 `Top-K 없음`, 다시 말해 전체 정류소를 직접 action으로 선택하는 ablation을 "
+        "동일 비용으로 다시 수행한 표는 포함되어 있지 않다. 따라서 본 보고서의 결론은 "
+        "`Top-K가 25개 구 전체에서 인과적으로 성능 향상을 증명했다`가 아니라, "
+        "`현재 25개 구 Top-K protocol에서 A2C 등 일부 알고리즘이 baseline을 넘었다`는 범위로 제한한다. "
+        "Top-K의 순수 효과를 엄밀히 증명하려면 "
+        "대표 구 몇 개에서 Top-K 유무만 바꾼 추가 controlled ablation이 필요하다."
+    )
+
+
+def vae_control_note_text() -> str:
+    """VAE 실험의 통제 수준과 해석 범위를 설명한다."""
+    return (
+        "VAE-REINFORCE는 같은 평가 날짜, Top-K 12, no-BC, 동일 runner 기본 하이퍼파라미터를 사용하되 "
+        "observation에 VAE latent feature를 추가한 탐색적 ablation이다. 다만 모든 구에서 seed 반복까지 "
+        "수행한 완전한 controlled comparison은 아니므로, 결과는 `VAE가 항상 개선된다`는 결론이 아니라 "
+        "`latent state feature가 어떤 구에서는 도움이 되고 어떤 구에서는 입력 복잡도만 늘릴 수 있다`는 "
+        "진단 결과로 해석한다."
+    )
+
+
 def build_report(
     summary: pd.DataFrame,
     curves: pd.DataFrame,
@@ -744,8 +797,9 @@ def build_report(
             ("best_win_districts", "Best 승리 구"),
             ("final_win_districts", "Final 승리 구"),
             ("mean_best_delta", "Mean Best Δ"),
-            ("median_best_delta", "Median Best Δ"),
+            ("mean_best_delta_pct", "Mean Best Δ%"),
             ("mean_final_delta", "Mean Final Δ"),
+            ("mean_final_delta_pct", "Mean Final Δ%"),
         ],
     )
     terms = pd.DataFrame(
@@ -774,6 +828,14 @@ def build_report(
                 "term": "Top-K action",
                 "meaning": "전체 정류소를 직접 고르지 않고 수요예측 점수 상위 12개 후보 중 선택하는 구조",
             },
+            {
+                "term": "BC",
+                "meaning": "Behavior Cloning. 규칙 기반 정책의 행동을 먼저 모방 학습하는 초기화 기법",
+            },
+            {
+                "term": "Rollback",
+                "meaning": "학습 중 평가 성능이 나빠질 때 이전 best policy로 되돌리는 보호장치. 현재 full run에서는 사용하지 않음",
+            },
         ]
     )
     term_table = md_table(terms, [("term", "용어"), ("meaning", "의미")], digits=1)
@@ -790,8 +852,9 @@ def build_report(
             "best_reward",
             "final_reward",
             "best_delta",
+            "best_delta_pct",
             "final_delta",
-            "best_step",
+            "best_point",
         ]
     ].sort_values(["algorithm", "group_type", "best_delta"], ascending=[True, True, False])
     bw_table = md_table(
@@ -807,8 +870,9 @@ def build_report(
             ("best_reward", "Best"),
             ("final_reward", "Final"),
             ("best_delta", "Best Δ"),
+            ("best_delta_pct", "Best Δ%"),
             ("final_delta", "Final Δ"),
-            ("best_step", "Best step"),
+            ("best_point", "Best point"),
         ],
     )
     all_best = (
@@ -824,8 +888,9 @@ def build_report(
                 "best_reward",
                 "final_reward",
                 "best_delta",
+                "best_delta_pct",
                 "final_delta",
-                "best_step",
+                "best_point",
             ]
         ]
     )
@@ -838,11 +903,13 @@ def build_report(
             ("best_reward", "Best"),
             ("final_reward", "Final"),
             ("best_delta", "Best Δ"),
+            ("best_delta_pct", "Best Δ%"),
             ("final_delta", "Final Δ"),
-            ("best_step", "Best step"),
+            ("best_point", "Best point"),
         ],
     )
     vae_table = ""
+    vae_all_table = ""
     vae_line = "VAE 추가 실험 로그가 없어 본문 표에서는 제외했다."
     if not vae_summary.empty:
         vae_best_wins = int((vae_summary["best_delta"] > 0).sum())
@@ -870,16 +937,30 @@ def build_report(
                 ("best_reward", "Best"),
                 ("final_reward", "Final"),
                 ("best_delta", "Best Δ"),
+                ("best_delta_pct", "Best Δ%"),
                 ("final_delta", "Final Δ"),
-                ("best_episode", "Best episode"),
+                ("best_point", "Best point"),
+            ],
+        )
+        vae_all_table = md_table(
+            vae_summary.sort_values("best_delta", ascending=False),
+            [
+                ("district", "구"),
+                ("baseline_reward", "Baseline"),
+                ("best_reward", "Best"),
+                ("final_reward", "Final"),
+                ("best_delta", "Best Δ"),
+                ("best_delta_pct", "Best Δ%"),
+                ("final_delta", "Final Δ"),
+                ("best_point", "Best point"),
             ],
         )
 
     text = f"""# 수요예측 기반 Top-K 후보 구조를 활용한 서울 따릉이 재배치 강화학습
 
-**서울 25개 구 실험에서 A2C가 가장 안정적이었고 Bandit은 단기 후보 선택의 한계를 보여준 알고리즘 비교**
+**{REPORT_SUBTITLE}**
 
-작성일: 2026-06-07
+작성일: {datetime.now().strftime('%Y-%m-%d')}
 
 ---
 
@@ -889,7 +970,7 @@ def build_report(
 
 본 실험에서는 세 가지 설계를 적용했다. 첫째, 10분 단위 대여/반납 데이터를 이용해 구별 **1시간 수요예측 feature**를 만들고 상태(state)에 추가했다. 둘째, 전체 정류소 행동(action)을 직접 선택하는 대신 매 step마다 수요예측 기반 **Top-K 후보 정류소 12개**를 구성했다. 셋째, 서울 25개 구를 같은 평가 날짜와 같은 baseline 기준으로 비교해 지역별 성능 차이를 분석했다.
 
-현재 보고서의 비교 알고리즘은 **REINFORCE with Value Baseline, A2C, PPO, Double DQN, Contextual Bandit(LinUCB)** 이다. 모든 성능은 고정된 7개 평가일 평균 reward와 `MostImbalanced` baseline 대비 Delta로 평가했다. 결과적으로 **A2C가 평균 Best Delta {mean_best.get('A2C', float('nan')):+.1f}, 평균 Final Delta {mean_final.get('A2C', float('nan')):+.1f}로 가장 안정적**이었다. REINFORCE와 PPO는 Best checkpoint 기준 가능성은 있었지만 Final 안정성이 낮았고, DQN은 Top-K rank action 구조에서 Q-value 학습이 가장 어려웠다. Bandit은 일부 구에서 빠르게 baseline을 넘었지만 장기 재배치 효과를 학습하지 못하는 한계가 있었다.
+현재 보고서의 비교 알고리즘은 **REINFORCE with Value Baseline, A2C, PPO, Double DQN, Contextual Bandit(LinUCB)** 이다. 모든 성능은 고정된 7개 평가일 평균 reward와 `MostImbalanced` baseline 대비 Delta로 평가했다. 결과적으로 **A2C가 평균 Best Delta {mean_best.get('A2C', float('nan')):+.1f}, 평균 Final Delta {mean_final.get('A2C', float('nan')):+.1f}로 가장 안정적**이었다. REINFORCE와 PPO는 Best checkpoint 기준 가능성은 있었지만 Final 안정성이 낮았고, DQN은 Top-K rank action 구조에서 Q-value 학습이 가장 어려웠다. Bandit은 일부 구에서 빠르게 baseline을 넘었지만, 현재 설정에서는 reward scale과 exploration coefficient의 상호작용을 추가로 확인해야 한다.
 
 ---
 
@@ -907,6 +988,8 @@ def build_report(
 - **수요예측 기반 상태 설계**: 1시간 예측 대여/반납 정보를 상태에 포함했다.
 - **Top-K 행동 후보 구조**: 매 step마다 의미 있는 후보 정류소 12개를 만들고 그 안에서 policy가 선택하도록 했다.
 - **Best/Final 분리 평가**: 학습 중 최고 성능과 마지막 성능을 분리해 성능 가능성과 안정성을 함께 해석했다.
+
+{protocol_scope_text()}
 
 ---
 
@@ -1012,6 +1095,8 @@ Top-K 구조는 agent가 정류소 전체를 무작위로 탐색하지 않도록
 
 이 방식은 action space를 줄이는 장점이 있지만, 매 step마다 후보 목록이 바뀌므로 PPO처럼 policy 변화 안정성을 전제로 하는 알고리즘에는 추가 variance를 만들 수 있다.
 
+{topk_ablation_note_text()}
+
 ### 5.3 Best/Final Checkpoint 해석
 
 학습 중 주기적으로 고정 평가일을 다시 실행하고, 가장 좋은 평가 성능을 Best checkpoint로 저장한다. Final checkpoint는 학습 종료 시점이다.
@@ -1029,6 +1114,8 @@ state_plus = concat(original_state, forecast_features, z)
 ```
 
 따라서 VAE 실험은 imitation learning이나 policy 초기화가 아니다. 목적은 "수요예측 feature만으로 부족한 지역별 반복 패턴을 latent state로 보완할 수 있는가"를 확인하는 것이다.
+
+{vae_control_note_text()}
 
 ---
 
@@ -1091,6 +1178,8 @@ A_a <- A_a + x_a x_a^T
 b_a <- b_a + reward * x_a
 ```
 
+주의할 점은 Bandit에도 `reward_scale=0.01`을 적용했다는 것이다. 이 값은 원래 DQN의 TD target 안정화를 위해 도입한 설정이며, LinUCB에서는 exploitation 항을 작게 만들지만 exploration bonus는 같은 비율로 줄이지 않는다. 따라서 현재 Bandit 결과는 장기 return을 보지 못하는 구조적 한계와 함께, reward scale과 alpha의 균형이 충분히 조정되지 않았을 가능성을 함께 가진다. Bandit을 최종 비교 대상으로 쓰려면 `reward_scale=1.0` 또는 alpha 재조정 ablation이 필요하다.
+
 ---
 
 ## 7. 실험 설정 (Experimental Setup)
@@ -1107,8 +1196,8 @@ b_a <- b_a + reward * x_a
 | candidate mode | `forecast_imbalance` |
 | travel penalty coefficient | 0.20 |
 | zone mode | `static3` |
-| BC 사용 여부 | 현재 결과는 no-BC |
-| rollback 사용 여부 | 현재 interactive full run은 rollback 없음 |
+| BC 사용 여부 | no-BC, Behavior Cloning 미사용 |
+| rollback 사용 여부 | 미사용, 학습 종료 후 Best checkpoint만 평가 |
 | REINFORCE/A2C 학습량 | 500 episodes |
 | PPO 학습량 | 170,000 timesteps |
 | DQN 학습량 | 170,000 timesteps |
@@ -1124,6 +1213,8 @@ b_a <- b_a + reward * x_a
 | DQN | Double DQN=True, Dueling=True, masked target Q=True, reward_scale=0.01, initial_eps=0.3, final_eps=0.02 |
 | Bandit | LinUCB, alpha=0.5, l2=1.0, reward_scale=0.01 |
 
+`BC`는 Behavior Cloning의 약어이며, 규칙 기반 정책의 행동을 먼저 모방 학습하는 초기화 기법이다. 현재 본문 결과는 BC를 사용하지 않은 no-BC 결과다. `rollback`은 평가 성능이 나빠질 때 이전 best policy로 되돌리는 보호장치인데, 현재 full run에서는 사용하지 않았다.
+
 ---
 
 ## 8. 실험 결과 (Results)
@@ -1132,7 +1223,7 @@ b_a <- b_a + reward * x_a
 
 {algo_table}
 
-**A2C**는 Best와 Final 모두 평균적으로 가장 안정적이었다. **REINFORCE**는 일부 구에서 큰 개선을 만들었지만 평균 Final Delta가 낮아 학습 후반 안정성 문제가 있었다. **PPO**는 Best checkpoint에서는 baseline을 넘는 구가 있었지만 Final에서 하락하는 경우가 많았다. **DQN**은 Double DQN과 Dueling Q-network를 사용했음에도 baseline을 넘지 못해, 현재 Top-K rank action 구조에서는 Q-value 기반 학습이 가장 어려운 것으로 나타났다. **Bandit**은 학습 속도는 가장 빠르지만, 장기 재고 변화와 이동 경로 효과를 직접 학습하지 못해 구별 편차가 컸다.
+**A2C**는 Best와 Final 모두 평균적으로 가장 안정적이었다. **REINFORCE**는 일부 구에서 큰 개선을 만들었지만 평균 Final Delta가 낮아 학습 후반 안정성 문제가 있었다. **PPO**는 Best checkpoint에서는 baseline을 넘는 구가 있었지만 Final에서 하락하는 경우가 많았다. **DQN**은 Double DQN과 Dueling Q-network를 사용했음에도 baseline을 넘지 못해, 현재 Top-K rank action 구조에서는 Q-value 기반 학습이 가장 어려운 것으로 나타났다. **Bandit**은 학습 속도는 가장 빠르지만, 장기 재고 변화와 이동 경로 효과를 직접 학습하지 못하고 reward scale 설정도 추가 검증이 필요해 구별 편차가 컸다.
 
 Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. 왼쪽 다섯 열은 알고리즘별 Best Delta이고, 오른쪽은 정류소 수, 전체 수요량, forecast coverage이다. 붉은 셀이 몰린 구는 baseline을 넘지 못한 구이며, 오른쪽 지표를 함께 보면 단순 알고리즘 문제인지, 수요 규모가 큰 구의 reward scale 문제인지, 예측 데이터 coverage가 낮은 문제인지 비교할 수 있다.
 
@@ -1149,6 +1240,8 @@ Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. �
 ### 8.3 Best 3 / Worst 3 구 분석
 
 {bw_table}
+
+표의 `Best point`는 알고리즘별 학습 진행 단위를 함께 표기한다. REINFORCE/A2C는 episode 단위(`ep`)이고, PPO/DQN/Bandit은 environment timestep 단위(`step`)다. 따라서 숫자의 크기를 서로 직접 비교하지 않고, 같은 알고리즘 안에서 어느 평가 시점이 best였는지 확인하는 용도로만 사용한다.
 
 아래 그림은 알고리즘별 Best/Worst 3 구를 분리한 것이다. 각 박스는 하나의 구이며, 초록 배경은 Best 3, 붉은 배경은 Worst 3을 의미한다. 검은 점은 해당 구에서 가장 좋았던 평가 시점을 나타낸다.
 
@@ -1196,7 +1289,7 @@ Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. �
 
 **DQN**은 Double DQN으로 target action 선택과 target value 평가를 분리하고, Dueling Q-network로 상태 가치와 action advantage를 나누어 추정했다. 그럼에도 평균 Best Delta와 Final Delta가 가장 낮았다. 주된 원인은 세 가지로 해석된다. 첫째, Top-K wrapper에서 action index는 고정 정류소가 아니라 현재 후보 rank이므로 같은 action 번호의 의미가 state마다 바뀐다. 둘째, 재배치 reward는 이동 후 여러 step에 걸쳐 재고 변화로 나타나기 때문에 Q-learning의 TD target이 noisy해진다. 셋째, forecast feature와 이동거리 penalty가 함께 작용하면서 특정 rank의 Q-value가 쉽게 포화되거나 잘못된 후보에 과대평가가 누적될 수 있다. 따라서 현재 설정에서 DQN은 baseline을 넘기보다 action 후보 구조와 reward scale에 더 민감하게 반응했다.
 
-**Contextual Bandit**은 현재 후보 feature와 즉시 reward만 사용하므로 학습이 매우 빠르다. 실제 실행에서도 25개 구 전체를 비교적 짧은 시간에 돌릴 수 있었다. 그러나 이 방법은 다음 state 이후의 재고 변화와 트럭 위치 효과를 장기 return으로 보지 않는다. 따라서 강남구처럼 단기 Top-K 선택만으로 개선되는 구에서는 baseline을 넘을 수 있지만, 강동구처럼 현재 선택이 이후 이동 경로와 재고 균형에 크게 영향을 주는 구에서는 성능이 크게 떨어졌다. 이 결과는 따릉이 재배치가 단순한 후보 선택 문제만은 아니며, 일부 지역에서는 장기 순차 의사결정으로 다루어야 함을 보여준다.
+**Contextual Bandit**은 현재 후보 feature와 즉시 reward만 사용하므로 학습이 매우 빠르다. 실제 실행에서도 25개 구 전체를 비교적 짧은 시간에 돌릴 수 있었다. 그러나 이 방법은 다음 state 이후의 재고 변화와 트럭 위치 효과를 장기 return으로 보지 않는다. 또한 현재 실험에서는 DQN과 같은 `reward_scale=0.01`을 사용했기 때문에 LinUCB의 exploitation 항이 exploration bonus에 비해 작아졌을 가능성이 있다. 따라서 Bandit의 부진은 구조적 한계와 하이퍼파라미터 이식 문제를 함께 고려해 해석해야 한다.
 
 ### 9.3 연구 근거와 연결
 
@@ -1207,6 +1300,8 @@ Figure 1은 기존 막대 분포 대신 **구별 scorecard**로 구성했다. �
 {vae_line}
 
 {vae_table}
+
+위 표의 `Best point`는 REINFORCE 계열 실험의 평가 단위가 episode이기 때문에 `ep`로 표기했다. PPO/DQN/Bandit은 timestep 단위(`step`)이며, 두 값은 학습 진행 단위가 다르므로 직접 수치 크기를 비교하지 않는다.
 
 VAE 실험의 의미는 "모든 구에서 성능이 좋아졌다"가 아니라, **latent feature가 어떤 구에서는 수요 패턴을 보완하지만 다른 구에서는 정책 입력을 더 복잡하게 만들어 성능을 낮출 수 있다**는 점이다. 특히 reconstruction 중심 VAE는 수요 패턴을 잘 압축하더라도 reward에 중요한 정보만 골라 압축한다고 보장할 수 없다. DeepMDP 계열 연구가 reward prediction과 next-state prediction을 함께 강조하는 이유도 여기에 있다.
 
@@ -1220,11 +1315,11 @@ VAE 실험의 의미는 "모든 구에서 성능이 좋아졌다"가 아니라, 
 
 ## 10. 결론 (Conclusion)
 
-현재 25개 구 결과에서 REINFORCE, A2C, PPO, DQN, Bandit을 비교하면, **A2C가 가장 안정적인 선택**이다. REINFORCE는 개선 가능성은 크지만 구별 편차가 있고, PPO는 Best checkpoint 기준 가능성은 있으나 Final 안정성이 약하다. DQN은 Double DQN과 Dueling 구조를 적용했지만 Top-K rank action과 delayed reward 조합에서 Q-value 학습이 충분히 안정화되지 못했다. Bandit은 빠른 진단 모델로는 유용하지만, 전체 문제를 대체하기에는 장기 재배치 효과를 보지 못한다.
+현재 25개 구 결과에서 REINFORCE, A2C, PPO, DQN, Bandit을 비교하면, **A2C가 가장 안정적인 선택**이다. REINFORCE는 개선 가능성은 크지만 구별 편차가 있고, PPO는 Best checkpoint 기준 가능성은 있으나 Final 안정성이 약하다. DQN은 Double DQN과 Dueling 구조를 적용했지만 Top-K rank action과 delayed reward 조합에서 Q-value 학습이 충분히 안정화되지 못했다. Bandit은 빠른 진단 모델로는 유용하지만, 현재 결과만으로는 장기 재배치 효과를 보지 못하는 구조적 한계와 reward scale/alpha 설정 문제를 분리하기 어렵다.
 
 이 결과의 함의는 단순히 "어떤 알고리즘이 가장 좋은가"에서 끝나지 않는다. 향후 연구에서는 구별 독립 학습을 넘어 구 간 이동, 트럭 배치 수, depot 위치, 실시간 재고 스냅샷을 함께 반영해야 한다. 또한 Top-K 후보가 실패한 구에서는 후보 생성 점수와 수요예측 coverage를 함께 진단해야 한다.
 
-> 서울 따릉이 재배치 문제에서는 알고리즘 선택만큼 **상태와 행동 구조 설계**가 중요하다. 1시간 수요예측과 Top-K 후보 행동 구조는 RL이 baseline을 넘어설 수 있는 조건을 만들었고, 그 효과는 구별 수요 패턴과 baseline 난이도에 따라 다르게 나타났다.
+> 서울 따릉이 재배치 문제에서는 알고리즘 선택만큼 **상태와 행동 구조 설계**가 중요하다. 현재 25개 구 protocol에서는 1시간 수요예측과 Top-K 후보 행동 구조를 적용했을 때 A2C를 중심으로 baseline을 넘는 결과가 관찰되었고, 그 효과는 구별 수요 패턴과 baseline 난이도에 따라 다르게 나타났다.
 
 ---
 
@@ -1249,7 +1344,11 @@ VAE 실험의 의미는 "모든 구에서 성능이 좋아졌다"가 아니라, 
 
 {all_table}
 
-## Appendix B. 재현용 주요 실행 설정
+## Appendix B. VAE-REINFORCE 전체 구별 결과
+
+{vae_all_table if vae_all_table else 'VAE-REINFORCE 전체 구별 결과 로그가 없어 생략했다.'}
+
+## Appendix C. 재현용 주요 실행 설정
 
 ```bash
 PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
@@ -1432,11 +1531,11 @@ def build_docx(
 
     title = doc.add_heading("수요예측 기반 Top-K 후보 구조를 활용한 서울 따릉이 재배치 강화학습", 1)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    p = doc.add_paragraph("서울 25개 구 실험에서 A2C가 가장 안정적이었고 Bandit은 단기 후보 선택의 한계를 보여준 알고리즘 비교")
+    p = doc.add_paragraph(REPORT_SUBTITLE)
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.runs[0].bold = True
     p.runs[0].font.size = Pt(10)
-    p = doc.add_paragraph("작성일: 2026-06-07")
+    p = doc.add_paragraph(f"작성일: {datetime.now().strftime('%Y-%m-%d')}")
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.runs[0].font.size = Pt(8.5)
 
@@ -1464,6 +1563,7 @@ def build_docx(
             "Best checkpoint와 Final checkpoint를 분리해 성능 가능성과 안정성을 함께 본다.",
         ]
     )
+    add_body(protocol_scope_text())
 
     doc.add_heading("2. 관련 연구", level=1)
     add_body(
@@ -1485,6 +1585,8 @@ def build_docx(
                 ["Best checkpoint", "학습 중 고정 평가일 평균 reward가 가장 좋았던 시점"],
                 ["Final checkpoint", "학습이 끝난 마지막 시점. Best와의 차이는 학습 안정성을 보여줌"],
                 ["Top-K action", "수요예측 점수 상위 12개 후보 정류소 중 선택하는 구조"],
+                ["BC", "Behavior Cloning. 규칙 기반 정책의 행동을 먼저 모방 학습하는 초기화 기법"],
+                ["Rollback", "평가 성능이 나빠질 때 이전 best policy로 되돌리는 보호장치. 현재 full run에서는 사용하지 않음"],
             ],
             columns=["term", "meaning"],
         ),
@@ -1543,6 +1645,7 @@ Delta = model_eval_reward - MostImbalanced_eval_reward
         "Top-K 구조는 agent가 정류소 전체를 무작위로 탐색하지 않도록 돕는다. 후보는 예측 불균형, 이동거리, 권역 penalty를 함께 고려해 만들어진다. "
         "policy network의 행동 index는 고정 정류소 ID가 아니라 현재 step의 후보 rank를 의미한다."
     )
+    add_body(topk_ablation_note_text())
     add_code_block(
         """
 candidate_score =
@@ -1561,6 +1664,7 @@ z = VAE_encoder(input_profile)
 state_plus = concat(original_state, forecast_features, z)
 """
     )
+    add_body(vae_control_note_text())
 
     doc.add_heading("6. 알고리즘", level=1)
     doc.add_heading("6.1 REINFORCE with Value Baseline", level=2)
@@ -1623,6 +1727,10 @@ A_a <- A_a + x_a x_a^T
 b_a <- b_a + reward * x_a
 """
     )
+    add_body(
+        "주의할 점은 Bandit에도 reward_scale=0.01을 적용했다는 것이다. 이 값은 원래 DQN의 TD target 안정화를 위해 도입한 설정이며, "
+        "LinUCB에서는 exploitation 항을 작게 만들지만 exploration bonus는 같은 비율로 줄이지 않는다. 따라서 현재 Bandit 결과는 장기 return을 보지 못하는 구조적 한계와 함께, reward scale과 alpha의 균형이 충분히 조정되지 않았을 가능성을 함께 가진다."
+    )
 
     doc.add_page_break()
     doc.add_heading("7. 실험 설정", level=1)
@@ -1636,8 +1744,8 @@ b_a <- b_a + reward * x_a
                 ["baseline", "MostImbalanced"],
                 ["후보 action 수", "Top-K 12"],
                 ["수요예측 horizon", "1시간"],
-                ["BC 사용 여부", "현재 결과는 no-BC"],
-                ["rollback 사용 여부", "현재 interactive full run은 rollback 없음"],
+                ["BC 사용 여부", "no-BC, Behavior Cloning 미사용"],
+                ["rollback 사용 여부", "미사용, 학습 종료 후 Best checkpoint만 평가"],
             ],
             columns=["item", "value"],
         ),
@@ -1670,8 +1778,9 @@ b_a <- b_a + reward * x_a
             ("best_win_districts", "Best 승리 구"),
             ("final_win_districts", "Final 승리 구"),
             ("mean_best_delta", "Mean Best Δ"),
-            ("median_best_delta", "Median Best Δ"),
+            ("mean_best_delta_pct", "Mean Best Δ%"),
             ("mean_final_delta", "Mean Final Δ"),
+            ("mean_final_delta_pct", "Mean Final Δ%"),
         ],
         font_size=7.1,
     )
@@ -1700,8 +1809,9 @@ b_a <- b_a + reward * x_a
                 "best_reward",
                 "final_reward",
                 "best_delta",
+                "best_delta_pct",
                 "final_delta",
-                "best_step",
+                "best_point",
             ]
         ],
         [
@@ -1712,12 +1822,14 @@ b_a <- b_a + reward * x_a
             ("best_reward", "Best"),
             ("final_reward", "Final"),
             ("best_delta", "Best Δ"),
+            ("best_delta_pct", "Best Δ%"),
             ("final_delta", "Final Δ"),
-            ("best_step", "Best step"),
+            ("best_point", "Best point"),
         ],
         font_size=6.5,
     )
     add_body(
+        "표의 Best point는 알고리즘별 학습 진행 단위를 함께 표기한다. REINFORCE/A2C는 episode 단위(ep)이고, PPO/DQN/Bandit은 environment timestep 단위(step)다. 따라서 숫자의 크기를 서로 직접 비교하지 않는다.\n\n"
         "아래 그림은 알고리즘별 Best/Worst 3 구를 분리한 것이다. 각 박스는 하나의 구이며, "
         "초록 배경은 Best 3, 붉은 배경은 Worst 3을 의미한다. 검은 점은 해당 구에서 가장 좋았던 평가 시점을 나타낸다."
     )
@@ -1752,7 +1864,7 @@ b_a <- b_a + reward * x_a
         "REINFORCE는 일부 구에서 큰 개선을 만들지만 Final 안정성이 낮다. Monte Carlo return을 사용하기 때문에 reward 분산이 크고, 구별 수요 패턴에 따라 학습곡선의 흔들림이 커질 수 있다.\n\n"
         "PPO는 clipping과 target KL을 사용하므로 일반적으로 안정적이라고 알려져 있지만, 이번 구조에서는 구별 편차가 컸다. Top-K rank 행동은 매 step마다 행동 index의 의미가 바뀌므로, PPO가 기대하는 완만한 policy update가 항상 좋은 방향으로 누적되지 않을 수 있다.\n\n"
         "DQN은 Double DQN으로 target action 선택과 target value 평가를 분리하고, Dueling Q-network로 상태 가치와 action advantage를 나누어 추정했다. 그럼에도 평균 Best Delta와 Final Delta가 가장 낮았다. 주된 원인은 Top-K rank action의 의미가 state마다 바뀌는 점, 재배치 reward가 여러 step 뒤의 재고 변화로 나타나는 점, forecast feature와 이동거리 penalty가 Q-value target을 noisy하게 만드는 점으로 해석된다.\n\n"
-        "Contextual Bandit은 현재 후보 feature와 즉시 reward만 사용하므로 학습이 매우 빠르다. 그러나 다음 state 이후의 재고 변화와 트럭 위치 효과를 장기 return으로 보지 않는다. 따라서 일부 구에서는 baseline을 넘을 수 있지만, 현재 선택이 이후 이동 경로와 재고 균형에 크게 영향을 주는 구에서는 성능이 크게 떨어졌다. 이 결과는 따릉이 재배치가 단순한 후보 선택 문제만은 아니며, 일부 지역에서는 장기 순차 의사결정으로 다루어야 함을 보여준다."
+        "Contextual Bandit은 현재 후보 feature와 즉시 reward만 사용하므로 학습이 매우 빠르다. 그러나 다음 state 이후의 재고 변화와 트럭 위치 효과를 장기 return으로 보지 않는다. 또한 현재 실험에서는 DQN과 같은 reward_scale=0.01을 사용했기 때문에 LinUCB의 exploitation 항이 exploration bonus에 비해 작아졌을 가능성이 있다. 따라서 Bandit의 부진은 구조적 한계와 하이퍼파라미터 이식 문제를 함께 고려해 해석해야 한다."
     )
     doc.add_heading("9.1 VAE latent 실험 해석", level=2)
     add_body(vae_line)
@@ -1766,10 +1878,28 @@ b_a <- b_a + reward * x_a
                 ("best_reward", "Best"),
                 ("final_reward", "Final"),
                 ("best_delta", "Best Δ"),
+                ("best_delta_pct", "Best Δ%"),
                 ("final_delta", "Final Δ"),
-                ("best_episode", "Best ep"),
+                ("best_point", "Best point"),
             ],
             font_size=6.5,
+        )
+    add_body("위 표의 Best point는 REINFORCE 계열 실험의 평가 단위가 episode이기 때문에 ep로 표기했다. PPO/DQN/Bandit은 timestep 단위(step)이며, 두 값은 학습 진행 단위가 다르므로 직접 수치 크기를 비교하지 않는다.")
+    if not vae_summary.empty:
+        doc.add_heading("9.2 VAE-REINFORCE 전체 구별 결과", level=2)
+        add_small_table(
+            vae_summary.sort_values("best_delta", ascending=False),
+            [
+                ("district", "구"),
+                ("baseline_reward", "Baseline"),
+                ("best_reward", "Best"),
+                ("final_reward", "Final"),
+                ("best_delta", "Best Δ"),
+                ("best_delta_pct", "Best Δ%"),
+                ("final_delta", "Final Δ"),
+                ("best_point", "Best point"),
+            ],
+            font_size=6.2,
         )
     add_body(
         "VAE 실험의 의미는 모든 구에서 성능이 좋아졌다는 것이 아니라, latent feature가 어떤 구에서는 수요 패턴을 보완하지만 다른 구에서는 정책 입력을 더 복잡하게 만들어 성능을 낮출 수 있다는 점이다. "
@@ -1782,11 +1912,11 @@ b_a <- b_a + reward * x_a
         "현재 25개 구 결과에서 REINFORCE, A2C, PPO, DQN, Bandit을 비교하면 A2C가 가장 안정적인 선택이다. "
         "REINFORCE는 개선 가능성은 크지만 구별 편차가 있고, PPO는 Best checkpoint 기준 가능성은 있으나 Final 안정성이 약하다. "
         "DQN은 Double DQN과 Dueling 구조를 적용했지만 Top-K rank action과 delayed reward 조합에서 Q-value 학습이 충분히 안정화되지 못했다. "
-        "Bandit은 빠른 진단 모델로는 유용하지만, 전체 문제를 대체하기에는 장기 재배치 효과를 보지 못한다.\n\n"
+        "Bandit은 빠른 진단 모델로는 유용하지만, 현재 결과만으로는 장기 재배치 효과를 보지 못하는 구조적 한계와 reward scale/alpha 설정 문제를 분리하기 어렵다.\n\n"
         "이 결과의 함의는 단순히 어떤 알고리즘이 가장 좋은가에서 끝나지 않는다. 향후 연구에서는 구별 독립 학습을 넘어 구 간 이동, 트럭 배치 수, depot 위치, 실시간 재고 스냅샷을 함께 반영해야 한다. "
         "또한 Top-K 후보가 실패한 구에서는 후보 생성 점수와 수요예측 coverage를 함께 진단해야 한다.\n\n"
         "가장 중요한 결론은 서울 따릉이 재배치 문제에서는 알고리즘 선택만큼 상태와 행동 구조 설계가 중요하다는 점이다. "
-        "1시간 수요예측과 Top-K 후보 행동 구조는 RL이 baseline을 넘어설 수 있는 조건을 만들었고, 그 효과는 구별 수요 패턴과 baseline 난이도에 따라 다르게 나타났다."
+        "현재 25개 구 protocol에서는 1시간 수요예측과 Top-K 후보 행동 구조를 적용했을 때 A2C를 중심으로 baseline을 넘는 결과가 관찰되었고, 그 효과는 구별 수요 패턴과 baseline 난이도에 따라 다르게 나타났다."
     )
 
     doc.add_heading("References", level=1)
@@ -1816,8 +1946,9 @@ b_a <- b_a + reward * x_a
             "best_reward",
             "final_reward",
             "best_delta",
+            "best_delta_pct",
             "final_delta",
-            "best_step",
+            "best_point",
         ]
     ]
     add_small_table(
@@ -1829,8 +1960,9 @@ b_a <- b_a + reward * x_a
             ("best_reward", "Best"),
             ("final_reward", "Final"),
             ("best_delta", "Best Δ"),
+            ("best_delta_pct", "Best Δ%"),
             ("final_delta", "Final Δ"),
-            ("best_step", "Best step"),
+            ("best_point", "Best point"),
         ],
         font_size=5.8,
     )
