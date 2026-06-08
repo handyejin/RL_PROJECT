@@ -39,6 +39,9 @@ data/episode_cache/
 *.log
 tmp/
 
+# Local safety backups before pull/merge
+백업_*/
+
 # Generated replay JSONs (학습 후 재생성, 파일 큼)
 docs/replay*.json
 docs/*_REINFORCE_*.json
