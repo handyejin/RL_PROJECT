@@ -66,7 +66,7 @@ DQN은 action mask를 적용한 Q-network를 학습하며, Double DQN target을 
 
 ```text
 a* = argmax_a Q_online(s', a)
-target = r + gamma * Q_target(s', a*)
+target = r + gamma * (1 - done) * Q_target(s', a*)
 loss = Huber(Q(s, a), target)
 ```
 
@@ -74,5 +74,6 @@ PPO는 MaskablePPO를 사용해 action mask와 clipped objective를 함께 적�
 
 ```text
 ratio = pi_new(a | s) / pi_old(a | s)
-loss = -min(ratio * A, clip(ratio, 1-eps, 1+eps) * A)
+L_clip = min(ratio * A, clip(ratio, 1-eps, 1+eps) * A)
+loss = -L_clip + value_loss - entropy_bonus
 ```

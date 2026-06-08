@@ -205,7 +205,7 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
             str(args.ppo_batch_size),
         ]
     if args.algorithm == "a2c":
-        cmd += ["--bc-val-dates", "0", "--anchor-coef", "0.0"]
+        cmd += ["--bc-val-dates", "0"]
     if args.progress:
         cmd.append("--progress")
     return cmd

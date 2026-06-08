@@ -6,6 +6,18 @@
     + clipped policy objective
     + action mask
 
+구현 방식:
+    PPO update는 sb3-contrib의 MaskablePPO를 사용한다. 이 파일은 공통 데이터,
+    action mask, 수요예측 state, 주기적 7일 평가, best/final 저장을 연결한다.
+
+PPO 목적함수:
+    r_t(theta) = pi_theta(a_t|s_t) / pi_old(a_t|s_t)
+    L_clip = min(
+        r_t(theta) * A_t,
+        clip(r_t(theta), 1 - eps, 1 + eps) * A_t
+    )
+    최종 loss에는 policy loss, value loss, entropy bonus가 함께 들어간다.
+
 State:
     기본형은 팀 공통 RebalanceEnv의 원본 observation만 사용한다.
     수정형은 observation 뒤에 forecast/capacity 기반 feature를 추가한다.
@@ -16,13 +28,16 @@ Action:
 
 Reward:
     원본 RebalanceEnv reward를 그대로 사용한다.
+
+실행 예:
+    PYTHONPATH=. python -m src.agents.ours.run_from_config \
+        --config config/ours/ppo_topk12.yaml
 """
 
 from __future__ import annotations
 
 import argparse
 import copy
-import random
 from pathlib import Path
 
 import numpy as np
@@ -32,78 +47,25 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from tqdm.auto import tqdm
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.agents.baselines import get_policy
 from src.agents.ours.common.bc_utils import collect_bc_data
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
-from src.agents.ours.common.episode_cache import load_episodes_cached
-from src.agents.ours.common.future_demand import maybe_wrap_future_demand
-from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
-from src.envs.data_loader import load_episode
-from src.envs.rebalance_env import RebalanceEnv
-
-
-def date_range(start: str, end: str) -> list[str]:
-    """시작일부터 종료일까지 날짜 문자열 목록을 만든다."""
-    import datetime
-
-    d = datetime.date.fromisoformat(start)
-    end_d = datetime.date.fromisoformat(end)
-    dates = []
-    while d <= end_d:
-        dates.append(d.isoformat())
-        d += datetime.timedelta(days=1)
-    return dates
-
-
-RNG = random.Random(42)
-ALL_DATES = date_range("2025-01-01", "2025-12-31")
-RNG.shuffle(ALL_DATES)
-N_TRAIN = int(len(ALL_DATES) * 0.8)
-TRAIN_DATES = ALL_DATES[:N_TRAIN]
-EVAL_DATES = sorted(ALL_DATES[N_TRAIN:N_TRAIN + 7])
-
-
-ENV_KW = dict(
-    n_trucks=3,
-    truck_capacity=20,
-    target_fill_ratio=0.5,
-    urgent_low_ratio=0.15,
-    urgent_high_ratio=0.85,
-    urgent_bonus=0.0,
-    strict_urgent_mask=True,
-    w_travel_km=-0.008,
-    w_travel_step=-0.002,
-    explore_bonus_scale=0.0,
-    shaping_scale=0.0,
-    future_demand_horizon=0,
+from src.agents.ours.common.experiment_utils import (
+    ENV_KW,
+    EVAL_DATES,
+    TRAIN_DATES,
+    evaluate_most_imbalanced as evaluate_heuristic,
+    load_rebalance_episodes as load_episodes,
+    print_eval_table,
 )
-
-
-def load_episodes(
-    dates: list[str],
-    district: str,
-    processed_dir: str = "data/processed",
-    cache_dir: str | None = "data/episode_cache",
-    progress_label: str | None = None,
-) -> list:
-    """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
-    return load_episodes_cached(
-        dates,
-        district,
-        processed_dir,
-        lambda root, gu, date: load_episode(root, district=gu, episode_start=f"{date} 00:00"),
-        cache_dir=cache_dir,
-        progress_label=progress_label,
-    )
+from src.agents.ours.common.future_demand import maybe_wrap_future_demand
+from src.envs.rebalance_env import RebalanceEnv
 
 
 def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_eval: bool = False):
     """공통 환경을 만들고, 필요하면 agent-local forecast wrapper를 적용한다."""
     env = RebalanceEnv(episodes, seed=seed, **ENV_KW)
     env = maybe_wrap_future_demand(env, args)
-    if not for_eval:
-        env = maybe_wrap_agent_reward_shaping(env, args)
     return maybe_wrap_candidate_actions(env, args)
 
 
@@ -122,23 +84,6 @@ def evaluate(model: MaskablePPO, episodes: list, args: argparse.Namespace, seed:
                 action_masks=env.action_masks(),
             )
             obs, reward, terminated, truncated, _ = env.step(int(action))
-            total += float(reward)
-            done = terminated or truncated
-        rewards.append(total)
-    return float(np.mean(rewards)), rewards
-
-
-def evaluate_heuristic(episodes: list, seed: int) -> tuple[float, list[float]]:
-    """같은 데이터 기준에서 most_imbalanced 휴리스틱 reward를 계산한다."""
-    heuristic = get_policy("most_imbalanced")
-    rewards = []
-    for ep in episodes:
-        env = RebalanceEnv(ep, seed=seed, **ENV_KW)
-        env.reset(seed=seed)
-        done = False
-        total = 0.0
-        while not done:
-            _, reward, terminated, truncated, _ = env.step(heuristic.act(env))
             total += float(reward)
             done = terminated or truncated
         rewards.append(total)
@@ -186,23 +131,12 @@ def pretrain_behavior_cloning(model: MaskablePPO, train_episodes: list, args: ar
     return {"bc_samples": float(len(actions)), "bc_loss": last_loss, "bc_acc": last_acc}
 
 
-def print_eval_table(label: str, heuristic_rewards: list[float], model_rewards: list[float]) -> None:
-    """7일 평가 결과를 표로 출력한다."""
-    print(f"\n=== {label} vs 휴리스틱 (7일) ===")
-    print(f"{'날짜':12}{'휴리스틱':>10}{'모델':>10}{'Δ(M-휴)':>9}")
-    for date, h, r in zip(EVAL_DATES, heuristic_rewards, model_rewards):
-        print(f"{date:12}{h:>10.1f}{r:>10.1f}{r - h:>9.1f}")
-    print(
-        f"{'평균':12}{np.mean(heuristic_rewards):>10.1f}{np.mean(model_rewards):>10.1f}"
-        f"{np.mean(model_rewards) - np.mean(heuristic_rewards):>9.1f}"
-    )
-
-
 def parse_args() -> argparse.Namespace:
     """MaskablePPO 비교 실험을 위한 CLI 옵션을 정의한다.
 
     PPO 자체 update는 sb3-contrib 구현을 사용하고, 여기서는 action mask,
-    state 보강, BC pretraining, conservative update 설정을 연결한다.
+    state 보강, 주기적 평가, conservative update 설정을 연결한다.
+    보고서 기준 설정은 config/ours/*.yaml을 우선한다.
     """
     parser = argparse.ArgumentParser(description="MaskablePPO bike rebalancing agent")
     parser.add_argument("--district", default="마포구")
@@ -254,11 +188,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-zone-count", type=int, default=3)
     parser.add_argument("--candidate-zone-penalty", type=float, default=0.0)
     parser.add_argument("--candidate-feature-mode", choices=["none", "basic"], default="none")
-    parser.add_argument("--agent-shaping-mode", choices=["projected_imbalance"], default="projected_imbalance")
-    parser.add_argument("--agent-shaping-scale", type=float, default=0.0)
-    parser.add_argument("--agent-shaping-gamma", type=float, default=0.99)
-    parser.add_argument("--rollback-to-best-on-eval", action="store_true")
-    parser.add_argument("--finetune-patience", type=int, default=0)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps"])
     parser.add_argument("--progress", action="store_true")
     parser.add_argument("--progress-update-steps", type=int, default=1_000)
@@ -339,7 +268,6 @@ def main() -> None:
     best_reward = -np.inf
     best_step = 0
     best_policy_state = copy.deepcopy(model.policy.state_dict())
-    patience_left = args.finetune_patience
     if args.bc_epochs > 0:
         bc_stats = pretrain_behavior_cloning(model, train_episodes, args)
         print(
@@ -395,14 +323,7 @@ def main() -> None:
                 best_reward = eval_reward
                 best_step = steps_done
                 best_policy_state = copy.deepcopy(model.policy.state_dict())
-                patience_left = args.finetune_patience
                 model.save(out_dir / "best_model")
-            else:
-                if args.rollback_to_best_on_eval:
-                    # PPO update가 BC policy를 망가뜨리면 바로 best policy로 되돌린다.
-                    model.policy.load_state_dict(best_policy_state)
-                if args.finetune_patience > 0:
-                    patience_left -= 1
             delta = eval_reward - heuristic_mean
             if progress_bar is not None:
                 progress_bar.set_postfix(
@@ -414,9 +335,6 @@ def main() -> None:
                 tqdm.write(f"timesteps={steps_done:7d} eval={eval_reward:8.2f} delta={delta:+8.2f}")
             else:
                 print(f"timesteps={steps_done:7d} eval={eval_reward:8.2f}")
-            if args.finetune_patience > 0 and patience_left <= 0:
-                print(f"fine-tuning early stop: best_step={best_step}, best_reward={best_reward:.2f}")
-                break
     finally:
         if progress_bar is not None:
             progress_bar.close()

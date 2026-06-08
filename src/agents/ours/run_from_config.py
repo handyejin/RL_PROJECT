@@ -9,6 +9,10 @@ YAML에서 관리하는 핵심 값:
     - forecast/capacity 경로
     - DQN/PPO 하이퍼파라미터
 
+주의:
+    보고서 기준 설정은 config/ours/*.yaml에 둔다. 아래 DEFAULTS는 YAML에서
+    값이 누락되었을 때 실행이 바로 깨지지 않게 하는 fallback일 뿐이다.
+
 예:
     PYTHONPATH=. python -m src.agents.ours.run_from_config \
       --config config/ours/dqn_topk3.yaml
@@ -29,6 +33,8 @@ import yaml
 from src.agents.ours.run_interactive import DISTRICTS, PROJECT_ROOT, build_command, ensure_inputs
 
 
+# 보고서 기준 하이퍼파라미터는 YAML 파일에 명시한다.
+# 이 dict는 YAML 누락값을 채우는 안전 fallback으로만 사용한다.
 DEFAULTS: dict[str, Any] = {
     "algorithm": "dqn",
     "district": "강남구",

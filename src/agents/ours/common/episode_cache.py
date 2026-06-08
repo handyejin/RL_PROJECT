@@ -5,7 +5,7 @@
 조건에서는 다음 실행부터 바로 재사용한다.
 
 주의:
-    capacity override, forecast override, reward shaping은 cache에 넣지 않는다.
+    capacity override, forecast override, DQN reward scale은 cache에 넣지 않는다.
     cache에는 순수 episode만 저장하고, 각 agent core가 기존처럼 로딩 후 override를
     적용한다. 따라서 forecast 파일이나 capacity 파일을 바꿔도 episode cache를
     재사용할 수 있다.
