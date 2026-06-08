@@ -19,6 +19,7 @@
     PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm dqn --district 영등포구
     PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm ppo --district 영등포구
     PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm reinforce --district ALL
+    PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm dqn --district ALL --candidate-top-k 3
 """
 
 from __future__ import annotations
@@ -105,6 +106,31 @@ def choose_district() -> str:
     return typed or "영등포구"
 
 
+def choose_top_k() -> int:
+    """터미널에서 Top-K 후보 action 개수를 선택한다."""
+    print("\nTop-K 후보 개수를 선택하세요.")
+    print("  1. 3  (강한 후보 축소, 안정성 확인용)")
+    print("  2. 6  (중간 절충)")
+    print("  3. 9  (넓은 후보군)")
+    print("  4. 12 (기존 기준)")
+    print("  5. 직접 입력")
+    choice = input("선택 [1/2/3/4/5, Enter=12]: ").strip()
+    if choice == "1":
+        return 3
+    if choice == "2":
+        return 6
+    if choice == "3":
+        return 9
+    if choice == "5":
+        typed = input("Top-K 숫자 입력 예: 3: ").strip()
+        try:
+            return max(2, int(typed))
+        except ValueError:
+            print("숫자가 아니어서 기본값 12를 사용합니다.")
+            return 12
+    return 12
+
+
 def build_command(args: argparse.Namespace, district: str) -> list[str]:
     """선택한 알고리즘/구에 맞는 core 실행 명령을 만든다."""
     module_by_algorithm = {
@@ -118,7 +144,12 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
     forecast_path = project_path(args.forecast_dir) / f"demand_forecast_1h_{district}.parquet"
     processed_dir = project_path(args.processed_dir)
     capacity_path = project_path(args.capacity_path)
-    tag = "_".join([args.tag, args.algorithm, district])
+    topk_label = f"topk{args.candidate_top_k}"
+    tag_parts = [args.tag]
+    if topk_label not in args.tag:
+        tag_parts.append(topk_label)
+    tag_parts.extend([args.algorithm, district])
+    tag = "_".join(tag_parts)
 
     cmd = [
         sys.executable,
@@ -247,7 +278,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bc-epochs", type=int, default=0)
     parser.add_argument("--future-mode", choices=["none", "oracle_net", "oracle_inout", "history_net", "forecast_projected_travel"], default="forecast_projected_travel")
     parser.add_argument("--future-horizon", type=int, default=6)
-    parser.add_argument("--candidate-top-k", type=int, default=12)
+    parser.add_argument("--candidate-top-k", type=int, default=None)
     parser.add_argument("--candidate-mode", choices=["imbalance", "forecast_imbalance"], default="forecast_imbalance")
     parser.add_argument("--candidate-travel-coef", type=float, default=0.20)
     parser.add_argument("--candidate-zone-mode", choices=["none", "static3"], default="static3")
@@ -278,6 +309,8 @@ def main() -> None:
         args.algorithm = choose_algorithm()
     if not args.district:
         args.district = choose_district()
+    if args.candidate_top_k is None:
+        args.candidate_top_k = choose_top_k()
 
     districts = DISTRICTS if args.district.upper() == "ALL" else [args.district]
     print(f"\n실행 알고리즘: {args.algorithm.upper()}", flush=True)
