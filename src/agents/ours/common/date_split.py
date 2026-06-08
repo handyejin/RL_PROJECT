@@ -17,7 +17,7 @@
 두 mode 모두 다음 변수는 동일하게 유지한다:
     seed = 42
     train_ratio = 0.8 → train 292일, eval pool 73일
-    EVAL_DATES = sorted(eval_pool[:7])  → 실제 평가에 쓰이는 7일
+    EVAL_DATES = sorted(eval_pool)  → eval pool 전체(73일)를 평가에 사용
 """
 
 from __future__ import annotations
@@ -46,11 +46,12 @@ def compute_split(
     start: str = "2025-01-01",
     end: str = "2025-12-31",
     train_ratio: float = 0.8,
-    n_eval: int = 7,
+    n_eval: int | None = None,
 ) -> tuple[list[str], list[str]]:
     """선택된 mode 로 (TRAIN_DATES, EVAL_DATES) 를 만든다.
 
-    EVAL_DATES 는 두 mode 모두 eval pool 상위 n_eval 일을 정렬해 사용한다.
+    EVAL_DATES 는 두 mode 모두 eval pool 을 정렬해 사용한다. n_eval 이 None
+    이면 eval pool 전체(73일), 정수면 상위 n_eval 일만 평가에 쓴다.
     """
     dates = date_range(start, end)
     n_train = int(len(dates) * train_ratio)
@@ -67,5 +68,5 @@ def compute_split(
     else:
         raise ValueError(f"unknown split mode: {mode!r}")
 
-    eval_dates = sorted(eval_pool[:n_eval])
+    eval_dates = sorted(eval_pool if n_eval is None else eval_pool[:n_eval])
     return train_dates, eval_dates

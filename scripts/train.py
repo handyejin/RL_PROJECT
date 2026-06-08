@@ -58,7 +58,7 @@ _ALL_DATES = _date_range("2025-01-01", "2025-12-31")
 _RNG.shuffle(_ALL_DATES)
 _N_TRAIN = int(len(_ALL_DATES) * 0.8)
 TRAIN_DATES = _ALL_DATES[:_N_TRAIN]                  # 292일 (셔플된 채 — 인덱스로 추출 시 random sample)
-EVAL_DATES = sorted(_ALL_DATES[_N_TRAIN:_N_TRAIN + 7])  # 7일 (eval pool 73일 중 random 7 → sorted)
+EVAL_DATES = sorted(_ALL_DATES[_N_TRAIN:])           # 73일 (eval pool 전체 → sorted)
 
 
 class HeuristicCompareCallback(BaseCallback):

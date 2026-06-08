@@ -41,6 +41,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.agents.baselines import get_policy
 from src.agents.ours.common.bc_utils import collect_bc_data
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
+from src.agents.ours.common.date_split import compute_split
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
 from src.agents.ours.common.future_demand import maybe_wrap_future_demand
 from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
@@ -64,13 +65,13 @@ def date_range(start: str, end: str) -> list[str]:
     return dates
 
 
-# dqn_core와 동일한 train/eval 날짜 분할(seed 42, 80/20, 평가 7일).
+# dqn_core와 동일한 train/eval 날짜 분할(seed 42, 80/20, 평가 eval pool 전체 73일).
 RNG = random.Random(42)
 ALL_DATES = date_range("2025-01-01", "2025-12-31")
 RNG.shuffle(ALL_DATES)
 N_TRAIN = int(len(ALL_DATES) * 0.8)
 TRAIN_DATES = ALL_DATES[:N_TRAIN]
-EVAL_DATES = sorted(ALL_DATES[N_TRAIN:N_TRAIN + 7])
+EVAL_DATES = sorted(ALL_DATES[N_TRAIN:])  # eval pool 전체(73일)
 
 
 # 트럭 수 외 나머지 env 설정은 dqn_core ENV_KW와 동일하게 유지한다.
@@ -267,8 +268,8 @@ def pretrain_behavior_cloning(model, train_episodes: list, args: argparse.Namesp
 
 
 def print_eval_table(label: str, heuristic_rewards: list[float], model_rewards: list[float]) -> None:
-    """7일 평가 결과를 표로 출력한다."""
-    print(f"\n=== {label} vs 휴리스틱 (7일) ===")
+    """평가 결과를 날짜별 표로 출력한다."""
+    print(f"\n=== {label} vs 휴리스틱 ({len(EVAL_DATES)}일) ===")
     print(f"{'날짜':12}{'휴리스틱':>10}{'모델':>10}{'Δ(M-휴)':>9}")
     for date, h, r in zip(EVAL_DATES, heuristic_rewards, model_rewards):
         print(f"{date:12}{h:>10.1f}{r:>10.1f}{r - h:>9.1f}")
@@ -284,6 +285,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--district", default="영등포구")
     parser.add_argument("--processed-dir", default="data/processed_seoul_all")
     parser.add_argument("--n-train-dates", type=int, default=200)
+    parser.add_argument("--split-mode", choices=["random", "chronological"], default="random",
+                        help="random: 1년 셔플 후 80/20. chronological: 1~10월 train / 10~12월 eval(OOD).")
     parser.add_argument("--total-timesteps", type=int, default=400_000)
     parser.add_argument("--eval-every", type=int, default=20_000)
     parser.add_argument("--tag", default="dqn_small")
@@ -354,6 +357,14 @@ def main() -> None:
     """환경을 top-N 정류소·소수 트럭으로 축소한 뒤 MaskableDQN을 학습/평가한다."""
     args = parse_args()
     env_kw = build_env_kw(args)
+
+    # split-mode에 따라 train/eval 날짜를 정한다. chronological은 1~10월 train,
+    # 10~12월 eval(미래 기간 OOD). print_eval_table이 전역 EVAL_DATES를 참조하므로
+    # 전역을 재할당해 표 출력 날짜도 함께 맞춘다.
+    global TRAIN_DATES, EVAL_DATES
+    TRAIN_DATES, EVAL_DATES = compute_split(args.split_mode, seed=args.seed)
+    print(f"split-mode={args.split_mode}: train pool {len(TRAIN_DATES)}일, eval {len(EVAL_DATES)}일 "
+          f"({EVAL_DATES[0]} ~ {EVAL_DATES[-1]})")
 
     train_episodes = load_episodes(TRAIN_DATES[: args.n_train_dates], args.district, args.processed_dir)
     eval_episodes = load_episodes(EVAL_DATES, args.district, args.processed_dir)
