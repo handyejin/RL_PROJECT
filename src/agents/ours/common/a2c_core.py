@@ -52,6 +52,7 @@ from tqdm.auto import tqdm
 from src.agents.baselines import get_policy
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
+from src.agents.ours.common.date_split import compute_split
 from src.agents.ours.common.future_demand import build_history_net_profile, maybe_wrap_future_demand
 from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
 from src.envs.data_loader import load_episode
@@ -71,12 +72,7 @@ def date_range(start: str, end: str) -> list[str]:
     return dates
 
 
-RNG = random.Random(42)
-ALL_DATES = date_range("2025-01-01", "2025-12-31")
-RNG.shuffle(ALL_DATES)
-N_TRAIN = int(len(ALL_DATES) * 0.8)
-TRAIN_DATES = ALL_DATES[:N_TRAIN]
-EVAL_DATES = sorted(ALL_DATES[N_TRAIN:N_TRAIN + 7])
+# TRAIN_DATES / EVAL_DATES 는 main() 에서 --split-mode 에 따라 compute_split 으로 생성한다.
 
 
 ENV_KW = dict(
@@ -551,11 +547,16 @@ def evaluate_heuristic(episodes: list, seed: int) -> tuple[float, list[float]]:
     return float(np.mean(rewards)), rewards
 
 
-def print_eval_table(label: str, heuristic_rewards: list[float], model_rewards: list[float]) -> None:
+def print_eval_table(
+    label: str,
+    heuristic_rewards: list[float],
+    model_rewards: list[float],
+    eval_dates: list[str],
+) -> None:
     """7일 평가 결과를 표로 출력한다."""
     print(f"\n=== {label} vs 휴리스틱 (7일) ===")
     print(f"{'날짜':12}{'휴리스틱':>10}{'모델':>10}{'Δ(M-휴)':>9}")
-    for date, h, r in zip(EVAL_DATES, heuristic_rewards, model_rewards):
+    for date, h, r in zip(eval_dates, heuristic_rewards, model_rewards):
         print(f"{date:12}{h:>10.1f}{r:>10.1f}{r - h:>9.1f}")
     print(
         f"{'평균':12}{np.mean(heuristic_rewards):>10.1f}{np.mean(model_rewards):>10.1f}"
@@ -632,6 +633,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--residual-policy", action="store_true")
     parser.add_argument("--residual-temp", type=float, default=1.0)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps"])
+    parser.add_argument(
+        "--split-mode",
+        choices=["random", "chronological"],
+        default="random",
+        help="random: seed=42 셔플 후 80/20, chronological: 시간순 80/20 (계절 OOD 평가)",
+    )
     return parser.parse_args()
 
 
@@ -642,13 +649,14 @@ def main() -> None:
     if args.device in {"cpu", "mps"}:
         device = torch.device(args.device)
 
-    train_dates = TRAIN_DATES[: args.n_train_dates]
+    train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
+    train_dates = train_dates_all[: args.n_train_dates]
     val_start = args.n_train_dates
     val_end = args.n_train_dates + args.bc_val_dates
-    val_dates = TRAIN_DATES[val_start:val_end]
+    val_dates = train_dates_all[val_start:val_end]
     print(
-        f"[A2C:{args.district}] loading episodes "
-        f"(train={len(train_dates)}, val={len(val_dates)}, eval={len(EVAL_DATES)})...",
+        f"[A2C:{args.district}] split={args.split_mode} loading episodes "
+        f"(train={len(train_dates)}, val={len(val_dates)}, eval={len(eval_dates)})...",
         flush=True,
     )
     train_episodes = load_episodes(
@@ -668,7 +676,7 @@ def main() -> None:
         else []
     )
     eval_episodes = load_episodes(
-        EVAL_DATES,
+        eval_dates,
         args.district,
         args.processed_dir,
         f"A2C {args.district} load eval" if args.progress else None,
@@ -772,7 +780,7 @@ def main() -> None:
         final_mean, final_rewards = evaluate(policy, eval_episodes, args, device, args.seed)
         torch.save({"policy": policy.state_dict(), "value": value.state_dict()}, out_dir / "actor_critic_final.pt")
         np.save(out_dir / "history.npy", np.asarray(history or [{"episode": 0, "eval_reward": final_mean}], dtype=object))
-        print_eval_table("a2c_bc_only", heuristic_rewards, final_rewards)
+        print_eval_table("a2c_bc_only", heuristic_rewards, final_rewards, eval_dates)
         return
 
     episode_iter = range(1, args.episodes + 1)
@@ -858,7 +866,7 @@ def main() -> None:
     np.save(out_dir / "history.npy", np.asarray(history, dtype=object))
     print(f"best reward: {best_reward:.2f} at episode {best_episode}")
     print(f"final reward: {final_mean:.2f}")
-    print_eval_table("a2c_final", heuristic_rewards, final_rewards)
+    print_eval_table("a2c_final", heuristic_rewards, final_rewards, eval_dates)
 
 
 if __name__ == "__main__":

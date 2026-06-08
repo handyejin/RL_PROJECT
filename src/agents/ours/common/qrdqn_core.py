@@ -1,21 +1,17 @@
-"""MaskablePPO 기반 따릉이 재배치 agent 공통 실행 루프.
+"""QR-DQN + 공공데이터 예측/거치대 수 보강 실행 파일.
+
+목적:
+    REINFORCE/A2C/PPO 와 동일한 ours env (forecast + capacity + top-k 후보) 위에서
+    Quantile Regression DQN 만 알고리즘으로 swap 한 실험을 돌리기 위함.
 
 알고리즘:
-    PPO(Proximal Policy Optimization)
-    + GAE advantage estimate
-    + clipped policy objective
-    + action mask
+    Maskable QR-DQN
+    + Double DQN target 옵션
+    + forecast_projected_travel state feature
+    + 실제 거치대 수(capacity) agent-local 반영
 
-State:
-    기본형은 팀 공통 RebalanceEnv의 원본 observation만 사용한다.
-    수정형은 observation 뒤에 forecast/capacity 기반 feature를 추가한다.
-
-Action:
-    현재 트럭이 이동할 정류소 index를 선택한다.
-    MaskablePPO가 action mask를 사용해 불가능한 정류소 선택을 제외한다.
-
-Reward:
-    원본 RebalanceEnv reward를 그대로 사용한다.
+State / Action / Reward 정의는 dqn_core 와 동일하며,
+다른 점은 Q-값 대신 quantile distribution 을 학습한다는 것뿐이다.
 """
 
 from __future__ import annotations
@@ -27,7 +23,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from sb3_contrib import MaskablePPO
+import torch.nn.functional as F
 from stable_baselines3.common.vec_env import DummyVecEnv
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -38,9 +34,7 @@ from src.agents.ours.common.data_overrides import apply_capacity_override, attac
 from src.agents.ours.common.date_split import compute_split
 from src.agents.ours.common.future_demand import maybe_wrap_future_demand
 from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
-# KLtoBC_PPO 는 별도로 src.agents.ppo.MaskablePPO (vanilla SB3 PPO + predict-time mask) 를
-# 상속한다 — ppo_v4 경로에서만 사용.
-from src.agents.ppo_v4 import KLtoBC_PPO
+from src.agents.qrdqn import MaskableQRDQN
 from src.envs.data_loader import load_episode
 from src.envs.rebalance_env import RebalanceEnv
 
@@ -86,7 +80,7 @@ def load_episodes(dates: list[str], district: str, processed_dir: str = "data/pr
 
 
 def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_eval: bool = False):
-    """공통 환경을 만들고, 필요하면 agent-local forecast wrapper를 적용한다."""
+    """공통 환경을 만들고 agent-local forecast wrapper를 적용한다."""
     env = RebalanceEnv(episodes, seed=seed, **ENV_KW)
     env = maybe_wrap_future_demand(env, args)
     if not for_eval:
@@ -94,8 +88,8 @@ def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_ev
     return maybe_wrap_candidate_actions(env, args)
 
 
-def evaluate(model: MaskablePPO, episodes: list, args: argparse.Namespace, seed: int) -> tuple[float, list[float]]:
-    """고정 7일 평가셋에서 greedy PPO policy의 평균 reward를 계산한다."""
+def evaluate(model: MaskableQRDQN, episodes: list, args: argparse.Namespace, seed: int) -> tuple[float, list[float]]:
+    """고정 7일 평가셋에서 greedy QR-DQN policy의 평균 reward를 계산한다."""
     rewards = []
     for ep in episodes:
         env = make_env(ep, args, seed=seed, for_eval=True)
@@ -132,47 +126,6 @@ def evaluate_heuristic(episodes: list, seed: int) -> tuple[float, list[float]]:
     return float(np.mean(rewards)), rewards
 
 
-def pretrain_behavior_cloning(model: MaskablePPO, train_episodes: list, args: argparse.Namespace) -> dict[str, float]:
-    """teacher action을 log-probability loss로 모방해 PPO policy를 먼저 초기화한다."""
-    states, actions, masks = collect_bc_data(train_episodes, args, make_env)
-    loader = DataLoader(
-        TensorDataset(torch.from_numpy(states), torch.from_numpy(actions), torch.from_numpy(masks)),
-        batch_size=args.bc_batch_size,
-        shuffle=True,
-    )
-    optimizer = torch.optim.Adam(model.policy.parameters(), lr=args.bc_lr)
-    last_loss = 0.0
-    last_acc = 0.0
-    model.policy.set_training_mode(True)
-    for epoch in range(args.bc_epochs):
-        total_loss = 0.0
-        total = 0
-        correct = 0
-        for x, y, m in loader:
-            x = x.to(model.device, dtype=torch.float32)
-            y = y.to(model.device, dtype=torch.long)
-            m = m.to(model.device, dtype=torch.bool)
-
-            # PPO BC loss:
-            #   MaskablePPO policy의 masked categorical distribution에서
-            #   teacher action의 log probability를 최대화한다.
-            dist = model.policy.get_distribution(x, action_masks=m)
-            log_prob = dist.log_prob(y)
-            loss = -log_prob.mean()
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.policy.parameters(), args.max_bc_grad_norm)
-            optimizer.step()
-            total_loss += float(loss.detach().cpu()) * len(y)
-            correct += int((dist.distribution.probs.argmax(dim=1) == y).sum().item())
-            total += len(y)
-        last_loss = total_loss / max(total, 1)
-        last_acc = correct / max(total, 1)
-        if epoch == 0 or (epoch + 1) % max(args.bc_log_every, 1) == 0:
-            print(f"  BC epoch {epoch+1}/{args.bc_epochs}: loss={last_loss:.4f}, acc={last_acc:.3f}")
-    return {"bc_samples": float(len(actions)), "bc_loss": last_loss, "bc_acc": last_acc}
-
-
 def print_eval_table(
     label: str,
     heuristic_rewards: list[float],
@@ -191,38 +144,36 @@ def print_eval_table(
 
 
 def parse_args() -> argparse.Namespace:
-    """MaskablePPO 비교 실험을 위한 CLI 옵션을 정의한다.
+    """QR-DQN 비교 실험을 위한 CLI 옵션을 정의한다.
 
-    PPO 자체 update는 sb3-contrib 구현을 사용하고, 여기서는 action mask,
-    state 보강, BC pretraining, conservative update 설정을 연결한다.
+    dqn_core 와 동일한 wrapper/state 옵션을 그대로 받고, QR-DQN 고유 옵션
+    (n_quantiles, kappa) 만 추가한다.
     """
-    parser = argparse.ArgumentParser(description="MaskablePPO bike rebalancing agent")
-    parser.add_argument("--algo", choices=["ppo", "ppo_v4"], default="ppo",
-                        help="ppo: sb3-contrib MaskablePPO (rollout/update 단계에서 action mask 사용), "
-                             "ppo_v4: KL-to-BC constrained PPO (src/agents/ppo_v4.py, predict-time mask)")
-    parser.add_argument("--bc-model-path", default="",
-                        help="ppo_v4 전용 — KL anchor 로 사용할 BC 모델 zip 경로 (빈값=anchor 없음)")
-    parser.add_argument("--kl-coef", type=float, default=1.0,
-                        help="ppo_v4 전용 — KL-to-BC penalty 계수")
+    parser = argparse.ArgumentParser(description="MaskableQRDQN forecast/capacity comparison agent")
     parser.add_argument("--district", default="마포구")
     parser.add_argument("--processed-dir", default="data/processed")
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--total-timesteps", type=int, default=50_000)
     parser.add_argument("--eval-every", type=int, default=10_000)
-    parser.add_argument("--tag", default="ppo")
+    parser.add_argument("--tag", default="qrdqn_forecast_capacity")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
-    parser.add_argument("--gae-lambda", type=float, default=0.95)
-    parser.add_argument("--n-steps", type=int, default=512)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--buffer-size", type=int, default=100_000)
+    parser.add_argument("--learning-starts", type=int, default=1_000)
     parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--n-epochs", type=int, default=10)
-    parser.add_argument("--clip-range", type=float, default=0.2)
-    parser.add_argument("--ent-coef", type=float, default=0.01)
-    parser.add_argument("--vf-coef", type=float, default=0.5)
-    parser.add_argument("--max-grad-norm", type=float, default=0.5)
-    parser.add_argument("--target-kl", type=float, default=0.0)
+    parser.add_argument("--train-freq", type=int, default=4)
+    parser.add_argument("--gradient-steps", type=int, default=1)
+    parser.add_argument("--target-update-interval", type=int, default=1_000)
+    parser.add_argument("--exploration-initial-eps", type=float, default=1.0)
+    parser.add_argument("--exploration-fraction", type=float, default=0.4)
+    parser.add_argument("--exploration-final-eps", type=float, default=0.05)
     parser.add_argument("--hidden", type=int, default=256)
+    parser.add_argument("--double-q", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--n-quantiles", type=int, default=200,
+                        help="QR-DQN quantile 개수")
+    parser.add_argument("--kappa", type=float, default=1.0,
+                        help="Huber loss threshold")
     parser.add_argument("--bc-epochs", type=int, default=0)
     parser.add_argument("--bc-dates", type=int, default=200)
     parser.add_argument("--bc-lr", type=float, default=1e-3)
@@ -238,7 +189,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--future-mode",
         choices=["none", "forecast_net", "forecast_inout", "forecast_projected_travel"],
-        default="none",
+        default="forecast_projected_travel",
     )
     parser.add_argument("--future-horizon", type=int, default=6)
     parser.add_argument("--capacity-path", default="")
@@ -267,7 +218,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """MaskablePPO 학습 루프와 주기적 7일 평가, best/final 저장을 실행한다."""
+    """MaskableQRDQN 을 생성하고 주기적 7일 평가로 best/final 모델을 저장한다."""
     args = parse_args()
     train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
     train_episodes = load_episodes(train_dates_all[: args.n_train_dates], args.district, args.processed_dir)
@@ -286,13 +237,12 @@ def main() -> None:
     obs_dim = int(sample_env.observation_space.shape[0])
     n_actions = int(sample_env.action_space.n)
 
-    out_dir = Path("logs") / f"{args.algo}_{args.tag}"
+    out_dir = Path("logs") / f"qrdqn_{args.tag}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     heuristic_mean, heuristic_rewards = evaluate_heuristic(eval_episodes, args.seed)
-    algo_label = "MaskablePPO" if args.algo == "ppo" else "PPO_V4 (KL-to-BC)"
-    print(f"=== {algo_label} | tag={args.tag} ===")
-    print(f"device={args.device}, obs_dim={obs_dim}, n_actions={n_actions}")
+    print(f"=== QR-DQN | tag={args.tag} ===")
+    print(f"device={args.device}, obs_dim={obs_dim}, n_actions={n_actions}, n_quantiles={args.n_quantiles}")
     if capacity_stats:
         print(
             "capacity override: "
@@ -306,93 +256,48 @@ def main() -> None:
         )
     print(f"heuristic mean reward: {heuristic_mean:.2f}")
 
-    if args.algo == "ppo_v4":
-        # KLtoBC_PPO 는 src.agents.ppo.MaskablePPO (vanilla PPO + predict-time masking) 를
-        # 상속한다. sb3_contrib MaskablePPO 와 net_arch 포맷(dict vs list)이 다르므로
-        # 여기서는 list 포맷을 사용한다.
-        model = KLtoBC_PPO(
-            "MlpPolicy",
-            train_env,
-            learning_rate=args.learning_rate,
-            n_steps=args.n_steps,
-            batch_size=args.batch_size,
-            n_epochs=args.n_epochs,
-            gamma=args.gamma,
-            gae_lambda=args.gae_lambda,
-            clip_range=args.clip_range,
-            ent_coef=args.ent_coef,
-            vf_coef=args.vf_coef,
-            max_grad_norm=args.max_grad_norm,
-            target_kl=args.target_kl if args.target_kl > 0.0 else None,
-            policy_kwargs={"net_arch": [args.hidden, args.hidden]},
-            seed=args.seed,
-            verbose=0,
-            device=args.device,
-            bc_model_path=args.bc_model_path or None,
-            kl_coef=args.kl_coef,
-        )
-    else:
-        # sb3-contrib MaskablePPO — rollout / advantage / policy update 전 단계에서
-        # action mask 를 적용한다. net_arch 는 dict 포맷 (pi/vf 분리).
-        model = MaskablePPO(
-            "MlpPolicy",
-            train_env,
-            learning_rate=args.learning_rate,
-            n_steps=args.n_steps,
-            batch_size=args.batch_size,
-            n_epochs=args.n_epochs,
-            gamma=args.gamma,
-            gae_lambda=args.gae_lambda,
-            clip_range=args.clip_range,
-            ent_coef=args.ent_coef,
-            vf_coef=args.vf_coef,
-            max_grad_norm=args.max_grad_norm,
-            target_kl=args.target_kl if args.target_kl > 0.0 else None,
-            policy_kwargs={"net_arch": dict(pi=[args.hidden, args.hidden], vf=[args.hidden, args.hidden])},
-            seed=args.seed,
-            verbose=0,
-            device=args.device,
-        )
+    model = MaskableQRDQN(
+        "MlpPolicy",
+        train_env,
+        n_quantiles=args.n_quantiles,
+        kappa=args.kappa,
+        learning_rate=args.learning_rate,
+        buffer_size=args.buffer_size,
+        learning_starts=args.learning_starts,
+        batch_size=args.batch_size,
+        gamma=args.gamma,
+        train_freq=args.train_freq,
+        gradient_steps=args.gradient_steps,
+        target_update_interval=args.target_update_interval,
+        exploration_initial_eps=args.exploration_initial_eps,
+        exploration_fraction=args.exploration_fraction,
+        exploration_final_eps=args.exploration_final_eps,
+        policy_kwargs={"net_arch": [args.hidden, args.hidden]},
+        seed=args.seed,
+        verbose=0,
+        device=args.device,
+        double_q=args.double_q,
+    )
 
     history = []
     best_reward = -np.inf
     best_step = 0
     best_policy_state = copy.deepcopy(model.policy.state_dict())
     patience_left = args.finetune_patience
-    if args.bc_epochs > 0:
-        bc_stats = pretrain_behavior_cloning(model, train_episodes, args)
-        print(
-            f"BC done: samples={int(bc_stats['bc_samples'])}, "
-            f"loss={bc_stats['bc_loss']:.4f}, acc={bc_stats['bc_acc']:.3f}"
-        )
-        eval_reward, _ = evaluate(model, eval_episodes, args, args.seed)
-        history.append({"timesteps": 0, "eval_reward": eval_reward, "stage": "bc"})
-        best_reward = eval_reward
-        best_policy_state = copy.deepcopy(model.policy.state_dict())
-        model.save(out_dir / "best_model")
-        print(f"timesteps={0:7d} eval={eval_reward:8.2f} stage=BC")
 
     if args.bc_only or args.total_timesteps <= 0:
         final_mean, final_rewards = evaluate(model, eval_episodes, args, args.seed)
         model.save(out_dir / "final_model")
-        np.save(out_dir / "history.npy", np.asarray(history or [{"timesteps": 0, "eval_reward": final_mean}], dtype=object))
-        print_eval_table(f"{args.algo}_bc_only", heuristic_rewards, final_rewards, eval_dates)
+        np.save(out_dir / "history.npy", np.asarray([{"timesteps": 0, "eval_reward": final_mean}], dtype=object))
+        print_eval_table("qrdqn_bc_only", heuristic_rewards, final_rewards, eval_dates)
         return
 
-    # sb3-contrib MaskablePPO 는 learn(use_masking=True) 로 rollout 시 mask 사용.
-    # KLtoBC_PPO 는 vanilla PPO.learn() 시그니처라 use_masking 인자를 받지 않는다.
-    learn_kwargs = {"use_masking": True} if args.algo == "ppo" else {}
     steps_done = 0
     while steps_done < args.total_timesteps:
         chunk = min(args.eval_every, args.total_timesteps - steps_done)
-        model.learn(
-            total_timesteps=chunk,
-            reset_num_timesteps=False,
-            progress_bar=False,
-            **learn_kwargs,
-        )
+        model.learn(total_timesteps=chunk, reset_num_timesteps=False, progress_bar=False)
         steps_done += chunk
-        eval_reward, _ = evaluate(model, eval_episodes, args, args.seed)
+        eval_reward, eval_rewards = evaluate(model, eval_episodes, args, args.seed)
         history.append({"timesteps": steps_done, "eval_reward": eval_reward})
         if eval_reward > best_reward:
             best_reward = eval_reward
@@ -402,7 +307,6 @@ def main() -> None:
             model.save(out_dir / "best_model")
         else:
             if args.rollback_to_best_on_eval:
-                # PPO update가 BC policy를 망가뜨리면 바로 best policy로 되돌린다.
                 model.policy.load_state_dict(best_policy_state)
             if args.finetune_patience > 0:
                 patience_left -= 1
@@ -419,7 +323,7 @@ def main() -> None:
 
     print(f"best reward: {best_reward:.2f} at timesteps {best_step}")
     print(f"final reward: {final_mean:.2f}")
-    print_eval_table(f"{args.algo}_final", heuristic_rewards, final_rewards, eval_dates)
+    print_eval_table("qrdqn_final", heuristic_rewards, final_rewards, eval_dates)
 
 
 if __name__ == "__main__":
