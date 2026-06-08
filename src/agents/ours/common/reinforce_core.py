@@ -56,6 +56,7 @@ from src.agents.ours.common.experiment_utils import (
     print_eval_table,
 )
 from src.agents.ours.common.future_demand import build_history_net_profile, maybe_wrap_future_demand
+from src.agents.ours.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
 from src.envs.rebalance_env import RebalanceEnv
 
 
@@ -144,6 +145,7 @@ def make_env(ep, args: argparse.Namespace, seed: int | None = None, for_eval: bo
     """공통 환경을 만들고, 필요하면 agent-local future wrapper를 적용한다."""
     env = RebalanceEnv(ep, seed=seed, **ENV_KW)
     env = maybe_wrap_future_demand(env, args)
+    env = maybe_wrap_vae_latent(env, args)
     return maybe_wrap_candidate_actions(env, args)
 
 
@@ -441,6 +443,9 @@ def parse_args() -> argparse.Namespace:
         default="none",
     )
     parser.add_argument("--future-horizon", type=int, default=6)
+    parser.add_argument("--vae-mode", choices=["none", "demand_latent"], default="none")
+    parser.add_argument("--vae-latent-path", default="")
+    parser.add_argument("--vae-latent-dim", type=int, default=4)
     parser.add_argument("--capacity-path", default="")
     parser.add_argument("--capacity-initial-fill-ratio", type=float, default=0.5)
     parser.add_argument("--forecast-path", default="")
@@ -491,6 +496,7 @@ def main() -> None:
         args.capacity_initial_fill_ratio,
     )
     forecast_stats = attach_forecast_override(all_episodes, args.forecast_path)
+    vae_stats = attach_vae_latent_override(all_episodes, args.vae_latent_path)
     if args.future_mode in {"history_net", "history_projected_travel"}:
         args.history_profile = build_history_net_profile(train_episodes)
     sample_env = make_env(eval_episodes[0], args)
@@ -536,6 +542,12 @@ def main() -> None:
         print(
             "forecast override: "
             f"matched={int(forecast_stats['forecast_matched'])}/{int(forecast_stats['forecast_total'])}"
+        )
+    if vae_stats:
+        print(
+            "VAE latent override: "
+            f"matched={int(vae_stats['vae_matched'])}/{int(vae_stats['vae_total'])}, "
+            f"latent_dim={int(vae_stats['vae_latent_dim'])}"
         )
     print(f"heuristic mean reward: {heuristic_mean:.2f}")
 

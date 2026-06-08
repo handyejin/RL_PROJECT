@@ -1,4 +1,4 @@
-"""REINFORCE/A2C/DQN/PPO 실험을 쉽게 실행하는 터미널 wrapper.
+"""VAE latent 생성과 REINFORCE/A2C/DQN/PPO 실험을 쉽게 실행하는 터미널 wrapper.
 
 목적:
     팀원이 내부 core 옵션을 모두 외우지 않아도, 알고리즘과 구만 선택해서
@@ -8,6 +8,7 @@
     - processed data: data/processed_seoul_all
     - forecast data: data/forecast_by_gu/demand_forecast_1h_{구}.parquet
     - capacity data: data/processed/station_capacity.csv
+    - optional VAE latent data: data/vae_latent_by_gu/vae_demand_latent_{구}.parquet
     - action 후보: YAML/CLI로 지정한 Top-K candidate 설정
     - BC 없음, rollback 없음
     - 대표 평가는 Best checkpoint 기준
@@ -15,6 +16,7 @@
 
 실행 예:
     PYTHONPATH=. python -m src.agents.ours.run_interactive
+    PYTHONPATH=. python -m src.agents.ours.run_interactive --task vae --district ALL
     PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm a2c --district 영등포구
     PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm dqn --district 영등포구
     PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm ppo --district 영등포구
@@ -68,6 +70,17 @@ def project_path(path: str | Path) -> Path:
     return p if p.is_absolute() else PROJECT_ROOT / p
 
 
+def choose_task() -> str:
+    """터미널에서 VAE 생성 또는 RL 학습 중 실행할 작업을 선택한다."""
+    print("\n실행 작업을 선택하세요.")
+    print("  1. RL 학습 실행")
+    print("  2. VAE latent 파일 생성")
+    choice = input("선택 [1/2, Enter=1]: ").strip()
+    if choice == "2":
+        return "vae"
+    return "rl"
+
+
 def choose_algorithm() -> str:
     """터미널에서 실행할 알고리즘을 선택한다."""
     print("\n알고리즘을 선택하세요.")
@@ -109,10 +122,10 @@ def choose_district() -> str:
 def choose_top_k() -> int:
     """터미널에서 Top-K 후보 action 개수를 선택한다."""
     print("\nTop-K 후보 개수를 선택하세요.")
-    print("  1. 3  (강한 후보 축소, 안정성 확인용)")
-    print("  2. 6  (중간 절충)")
-    print("  3. 9  (넓은 후보군)")
-    print("  4. 12 (기존 기준)")
+    print("  1. Top-K = 3  (강한 후보 축소, 안정성 확인용)")
+    print("  2. Top-K = 6  (중간 절충)")
+    print("  3. Top-K = 9  (넓은 후보군)")
+    print("  4. Top-K = 12 (기존 기준)")
     print("  5. 직접 입력")
     choice = input("선택 [1/2/3/4/5, Enter=12]: ").strip()
     if choice == "1":
@@ -131,6 +144,45 @@ def choose_top_k() -> int:
     return 12
 
 
+def choose_vae_mode() -> str:
+    """터미널에서 VAE latent state feature 사용 여부를 선택한다."""
+    print("\nVAE 수요 latent feature를 사용할까요?")
+    print("  1. 사용 안 함 (기본)")
+    print("  2. 사용함: Forecast + VAE latent")
+    choice = input("선택 [1/2, Enter=1]: ").strip()
+    if choice == "2":
+        return "demand_latent"
+    return "none"
+
+
+def build_vae_command(args: argparse.Namespace, district: str) -> list[str]:
+    """선택한 구에 대한 VAE latent 생성 명령을 만든다."""
+    return [
+        sys.executable,
+        "scripts/train_vae_demand_latent.py",
+        "--district",
+        district,
+        "--processed-dir",
+        str(project_path(args.processed_dir)),
+        "--out-dir",
+        str(project_path(args.vae_latent_dir)),
+        "--latent-dim",
+        str(args.vae_latent_dim),
+        "--epochs",
+        str(args.vae_epochs),
+        "--hidden",
+        str(args.vae_hidden),
+        "--batch-size",
+        str(args.vae_batch_size),
+        "--lr",
+        str(args.vae_lr),
+        "--beta",
+        str(args.vae_beta),
+        "--device",
+        "mps" if args.device == "mps" else "cpu",
+    ] + (["--progress"] if args.progress else ["--no-progress"])
+
+
 def build_command(args: argparse.Namespace, district: str) -> list[str]:
     """선택한 알고리즘/구에 맞는 core 실행 명령을 만든다."""
     module_by_algorithm = {
@@ -142,6 +194,7 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
     module = module_by_algorithm[args.algorithm]
 
     forecast_path = project_path(args.forecast_dir) / f"demand_forecast_1h_{district}.parquet"
+    vae_latent_path = project_path(args.vae_latent_dir) / f"vae_demand_latent_{district}.parquet"
     processed_dir = project_path(args.processed_dir)
     capacity_path = project_path(args.capacity_path)
     topk_label = f"topk{args.candidate_top_k}"
@@ -167,6 +220,12 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
         args.future_mode,
         "--future-horizon",
         str(args.future_horizon),
+        "--vae-mode",
+        args.vae_mode,
+        "--vae-latent-path",
+        str(vae_latent_path if args.vae_mode != "none" else ""),
+        "--vae-latent-dim",
+        str(args.vae_latent_dim),
         "--capacity-path",
         str(capacity_path),
         "--forecast-path",
@@ -242,10 +301,28 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
     return cmd
 
 
+def ensure_vae_inputs(args: argparse.Namespace) -> bool:
+    """VAE latent 생성에 필요한 전처리 파일이 있는지 확인한다."""
+    processed_dir = project_path(args.processed_dir)
+    missing = []
+    for filename in ["stations.parquet", "demand_10min.parquet"]:
+        path = processed_dir / filename
+        if not path.exists():
+            missing.append(str(path))
+    if missing:
+        print("\nVAE latent 생성에 필요한 파일이 없습니다.")
+        for path in missing:
+            print(f"  - {path}")
+        print("먼저 서울 전체 전처리를 실행하세요.")
+        return False
+    return True
+
+
 def ensure_inputs(args: argparse.Namespace, district: str) -> bool:
     """학습에 필요한 전처리/forecast 파일이 있는지 확인한다."""
     processed_dir = project_path(args.processed_dir)
     forecast_path = project_path(args.forecast_dir) / f"demand_forecast_1h_{district}.parquet"
+    vae_latent_path = project_path(args.vae_latent_dir) / f"vae_demand_latent_{district}.parquet"
     missing = []
     if not (processed_dir / "stations.parquet").exists():
         missing.append(str(processed_dir / "stations.parquet"))
@@ -253,6 +330,8 @@ def ensure_inputs(args: argparse.Namespace, district: str) -> bool:
         missing.append(str(processed_dir / "trips.parquet"))
     if not forecast_path.exists():
         missing.append(str(forecast_path))
+    if args.vae_mode != "none" and not vae_latent_path.exists():
+        missing.append(str(vae_latent_path))
     if missing:
         print(f"\n[{district}] 필요한 파일이 없습니다.")
         for path in missing:
@@ -265,10 +344,12 @@ def ensure_inputs(args: argparse.Namespace, district: str) -> bool:
 def parse_args() -> argparse.Namespace:
     """대화형 실행과 명령형 실행을 모두 지원하는 옵션을 정의한다."""
     parser = argparse.ArgumentParser(description="Interactive runner for our RL experiments.")
+    parser.add_argument("--task", choices=["rl", "vae"], default="")
     parser.add_argument("--algorithm", choices=["reinforce", "a2c", "dqn", "ppo"], default="")
     parser.add_argument("--district", default="")
     parser.add_argument("--processed-dir", default="data/processed_seoul_all")
     parser.add_argument("--forecast-dir", default="data/forecast_by_gu")
+    parser.add_argument("--vae-latent-dir", default="data/vae_latent_by_gu")
     parser.add_argument("--capacity-path", default="data/processed/station_capacity.csv")
     parser.add_argument("--episodes", type=int, default=500)
     parser.add_argument("--total-timesteps", type=int, default=170_000)
@@ -278,6 +359,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bc-epochs", type=int, default=0)
     parser.add_argument("--future-mode", choices=["none", "oracle_net", "oracle_inout", "history_net", "forecast_projected_travel"], default="forecast_projected_travel")
     parser.add_argument("--future-horizon", type=int, default=6)
+    parser.add_argument("--vae-mode", choices=["none", "demand_latent"], default="")
+    parser.add_argument("--vae-latent-dim", type=int, default=4)
+    parser.add_argument("--vae-epochs", type=int, default=30)
+    parser.add_argument("--vae-hidden", type=int, default=32)
+    parser.add_argument("--vae-batch-size", type=int, default=1024)
+    parser.add_argument("--vae-lr", type=float, default=1e-3)
+    parser.add_argument("--vae-beta", type=float, default=0.01)
     parser.add_argument("--candidate-top-k", type=int, default=None)
     parser.add_argument("--candidate-mode", choices=["imbalance", "forecast_imbalance"], default="forecast_imbalance")
     parser.add_argument("--candidate-travel-coef", type=float, default=0.20)
@@ -303,18 +391,53 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """선택한 알고리즘을 선택한 구 또는 25개 구 전체에 대해 순차 실행한다."""
+    """선택한 작업을 선택한 구 또는 25개 구 전체에 대해 순차 실행한다."""
     args = parse_args()
+    should_prompt = not args.task or not args.algorithm or not args.district or args.candidate_top_k is None
+    if not args.task:
+        args.task = choose_task()
+    if args.task == "vae":
+        if not args.district:
+            args.district = choose_district()
+        districts = DISTRICTS if args.district.upper() == "ALL" else [args.district]
+        print(f"\n실행 작업: VAE latent 생성", flush=True)
+        print(f"실행 지역: {', '.join(districts)}", flush=True)
+        print(
+            f"latent_dim={args.vae_latent_dim}, epochs={args.vae_epochs}, "
+            f"out_dir={project_path(args.vae_latent_dir)}",
+            flush=True,
+        )
+        if not ensure_vae_inputs(args):
+            return
+        for index, district in enumerate(districts, start=1):
+            print("\n" + "=" * 80, flush=True)
+            print(f"[{index}/{len(districts)}] {district} VAE latent 생성", flush=True)
+            cmd = build_vae_command(args, district)
+            print("명령:", flush=True)
+            print(" ".join(cmd), flush=True)
+            if args.dry_run:
+                continue
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            env["PYTHONPATH"] = str(PROJECT_ROOT)
+            code = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env).returncode
+            if code != 0:
+                raise SystemExit(code)
+        return
+
     if not args.algorithm:
         args.algorithm = choose_algorithm()
     if not args.district:
         args.district = choose_district()
     if args.candidate_top_k is None:
         args.candidate_top_k = choose_top_k()
+    if not args.vae_mode:
+        args.vae_mode = choose_vae_mode() if should_prompt else "none"
 
     districts = DISTRICTS if args.district.upper() == "ALL" else [args.district]
     print(f"\n실행 알고리즘: {args.algorithm.upper()}", flush=True)
     print(f"실행 지역: {', '.join(districts)}", flush=True)
+    print(f"VAE latent: {'사용' if args.vae_mode != 'none' else '미사용'}", flush=True)
     if args.algorithm in {"reinforce", "a2c"}:
         print(f"episodes={args.episodes}, eval_every={args.eval_every}, top_k={args.candidate_top_k}", flush=True)
     else:

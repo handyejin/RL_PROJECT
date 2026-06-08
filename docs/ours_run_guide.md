@@ -21,6 +21,7 @@
 | 정류소 마스터 | `data/stations_master.csv` | 정류소 위치, 구 정보, 거치대 수 등 |
 | 전처리 결과 | `data/processed_seoul_all/` | 서울 전체 episode 생성을 위한 parquet |
 | 구별 1시간 수요예측 | `data/forecast_by_gu/` | 각 구별 `rent/return/net` 예측 feature |
+| VAE 수요 latent | `data/vae_latent_by_gu/` | 정류소별 요일/시간대 수요 패턴을 압축한 선택 feature |
 | 정류소 capacity | `data/processed/station_capacity.csv` | 정류소별 최대 거치 가능 수 |
 
 ## 2. 전처리 실행
@@ -68,6 +69,65 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_con
   --district ALL
 ```
 
+## 3.1 VAE latent 파일 생성
+
+VAE는 필수 입력이 아니라 추가 실험용 state feature다. 기존 수요예측 값을 그대로 붙이는 대신,
+정류소별 과거 수요 패턴을 작은 latent vector로 압축해서 observation에 추가한다.
+
+강남구만 생성하려면:
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python scripts/train_vae_demand_latent.py \
+  --district 강남구 \
+  --processed-dir data/processed_seoul_all \
+  --out-dir data/vae_latent_by_gu \
+  --latent-dim 4 \
+  --epochs 30
+```
+
+25개 구 전체를 만들려면:
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python scripts/train_vae_demand_latent.py \
+  --district ALL \
+  --processed-dir data/processed_seoul_all \
+  --out-dir data/vae_latent_by_gu \
+  --latent-dim 4 \
+  --epochs 30
+```
+
+같은 작업은 interactive wrapper에서도 실행할 수 있다.
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+```
+
+첫 메뉴에서 `VAE latent 파일 생성`을 선택하면 VAE 파일만 먼저 생성한다.
+명령형으로 바로 실행하려면:
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+  --task vae \
+  --district ALL \
+  --vae-epochs 30
+```
+
+출력 파일은 다음 형식이다.
+
+```text
+data/vae_latent_by_gu/vae_demand_latent_강남구.parquet
+```
+
+VAE를 붙인 A2C 실험은 다음처럼 실행한다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+  --config config/ours/a2c_topk12_vae.yaml
+```
+
+보고서에 쓸 때는 VAE를 메인 알고리즘으로 설명하기보다,
+**수요 패턴 표현 학습(representation learning)을 state에 추가한 보조 실험**으로 설명하는 것이 자연스럽다.
+
 ## 4. 쉽게 실행하는 방법
 
 터미널 선택형 wrapper를 추가했다.
@@ -114,6 +174,7 @@ Top-K처럼 실험마다 바꾸는 값은 YAML 파일로 관리할 수 있다.
 | `config/ours/dqn_topk12.yaml` | 기존 DQN Top-K 12 비교 실험 |
 | `config/ours/reinforce_topk12.yaml` | REINFORCE 보고서 기준 실험 |
 | `config/ours/a2c_topk12.yaml` | A2C 보고서 기준 실험 |
+| `config/ours/a2c_topk12_vae.yaml` | A2C + VAE latent 보조 실험 |
 | `config/ours/ppo_topk12.yaml` | PPO 보고서 기준 실험 |
 
 예를 들어 DQN Top-K 3 실험은 다음처럼 실행한다.

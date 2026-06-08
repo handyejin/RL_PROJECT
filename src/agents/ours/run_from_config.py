@@ -40,6 +40,7 @@ DEFAULTS: dict[str, Any] = {
     "district": "강남구",
     "processed_dir": "data/processed_seoul_all",
     "forecast_dir": "data/forecast_by_gu",
+    "vae_latent_dir": "data/vae_latent_by_gu",
     "capacity_path": "data/processed/station_capacity.csv",
     "episodes": 500,
     "total_timesteps": 170_000,
@@ -49,6 +50,8 @@ DEFAULTS: dict[str, Any] = {
     "bc_epochs": 0,
     "future_mode": "forecast_projected_travel",
     "future_horizon": 6,
+    "vae_mode": "none",
+    "vae_latent_dim": 4,
     "candidate_top_k": 12,
     "candidate_mode": "forecast_imbalance",
     "candidate_travel_coef": 0.20,
@@ -104,6 +107,7 @@ def build_args(config: dict[str, Any], cli: argparse.Namespace) -> SimpleNamespa
         {
             "processed_dir": "processed_dir",
             "forecast_dir": "forecast_dir",
+            "vae_latent_dir": "vae_latent_dir",
             "capacity_path": "capacity_path",
         },
     )
@@ -128,6 +132,8 @@ def build_args(config: dict[str, Any], cli: argparse.Namespace) -> SimpleNamespa
         {
             "future_mode": "future_mode",
             "future_horizon": "future_horizon",
+            "vae_mode": "vae_mode",
+            "vae_latent_dim": "vae_latent_dim",
         },
     )
     _apply_section(
