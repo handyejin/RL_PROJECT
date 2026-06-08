@@ -8,6 +8,7 @@
     1. REINFORCE 또는 A2C 학습
     2. VAE demand latent 파일 생성
     3. Best/Worst 3개 구 seed sensitivity 실험
+    4. 최종 chronological split 실험 전체 실행
 
 실행 예:
     PYTHONPATH=. python -m src.agents.ours.run_a2c_reinforce_interactive
@@ -39,8 +40,9 @@ def choose_mode() -> str:
     print("  1. REINFORCE/A2C 학습 실행")
     print("  2. VAE latent 파일 생성")
     print("  3. Best/Worst 3구 seed 반복 실험")
-    choice = input("선택 [1/2/3, Enter=1]: ").strip()
-    return {"2": "vae", "3": "seed"}.get(choice, "train")
+    print("  4. 최종 chronological 전체 실험 실행")
+    choice = input("선택 [1/2/3/4, Enter=1]: ").strip()
+    return {"2": "vae", "3": "seed", "4": "final"}.get(choice, "train")
 
 
 def choose_algorithm() -> str:
@@ -105,7 +107,7 @@ def choose_vae_mode() -> str:
 def parse_args() -> argparse.Namespace:
     """대화형/명령형 실행 옵션을 정의한다."""
     parser = argparse.ArgumentParser(description="REINFORCE/A2C 전용 interactive runner.")
-    parser.add_argument("--mode", choices=["train", "vae", "seed"], default="")
+    parser.add_argument("--mode", choices=["train", "vae", "seed", "final"], default="")
     parser.add_argument("--algorithm", choices=["reinforce", "a2c"], default="")
     parser.add_argument("--district", default="")
     parser.add_argument("--processed-dir", default=DEFAULT_RUNNER_VALUES["processed_dir"])
@@ -206,9 +208,8 @@ def run_seed_sensitivity(args: argparse.Namespace) -> None:
     """Best/Worst 3구에 seed 123/777을 추가 실행하고 요약 파일을 만든다."""
     if args.split_mode == "chronological" and args.use_existing_seed42:
         print(
-            "\n주의: chronological split에서는 기존 random seed42 full run을 재사용하지 않습니다.\n"
-            "먼저 A2C/REINFORCE 전체 25개 구를 --split-mode chronological --seed 42로 학습한 뒤,\n"
-            "seed 반복 실험을 실행하세요. seed42도 Best/Worst 3구만 새로 돌리려면 --no-use-existing-seed42를 붙이세요.",
+            "\nchronological split 기준 seed 실험입니다.\n"
+            "seed 42는 chronological full run 로그만 재사용하며, 기존 random split 로그는 사용하지 않습니다.",
             flush=True,
         )
     print("\n실행 작업: Best/Worst 3구 seed 반복 실험", flush=True)
@@ -247,6 +248,33 @@ def run_seed_sensitivity(args: argparse.Namespace) -> None:
     run_command(cmd, False)
 
 
+def run_final_chronological(args: argparse.Namespace) -> None:
+    """최종 기준 split으로 A2C/REINFORCE 전체 학습 후 seed 반복 실험을 실행한다."""
+    if args.candidate_top_k is None:
+        args.candidate_top_k = 12
+    if not args.vae_mode:
+        args.vae_mode = "none"
+    args.split_mode = "chronological"
+    args.seed = args.base_seed
+    args.district = "ALL"
+
+    print("\n실행 작업: 최종 chronological 전체 실험", flush=True)
+    print("1. A2C seed 42 전체 25개 구 학습", flush=True)
+    print("2. REINFORCE seed 42 전체 25개 구 학습", flush=True)
+    print("3. Best/Worst 3구 seed 123/777 추가 학습 및 요약", flush=True)
+    print(f"episodes={args.episodes}, eval_every={args.eval_every}, top_k={args.candidate_top_k}", flush=True)
+
+    for algorithm in ["a2c", "reinforce"]:
+        stage_args = argparse.Namespace(**vars(args))
+        stage_args.algorithm = algorithm
+        stage_args.district = "ALL"
+        run_training(stage_args, should_prompt=False)
+
+    seed_args = argparse.Namespace(**vars(args))
+    seed_args.use_existing_seed42 = True
+    run_seed_sensitivity(seed_args)
+
+
 def main() -> None:
     """선택한 담당 실험을 실행한다."""
     args = parse_args()
@@ -259,6 +287,8 @@ def main() -> None:
         run_vae(args)
     elif args.mode == "seed":
         run_seed_sensitivity(args)
+    elif args.mode == "final":
+        run_final_chronological(args)
     else:
         run_training(args, should_prompt)
 

@@ -179,6 +179,7 @@ PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive
 1. REINFORCE/A2C 학습 실행
 2. VAE latent 파일 생성
 3. Best/Worst 3구 seed 반복 실험
+4. 최종 chronological 전체 실험 실행
 ```
 
 seed 반복 실험은 다음 기준으로 자동 실행된다.
@@ -198,6 +199,21 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_rein
 ```
 
 실제로 실행하려면 `--dry-run`만 빼면 된다.
+
+최종 기준을 한 번에 순서대로 실행하려면 메뉴에서 `4`를 선택하거나 다음 명령을 사용한다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive \
+  --mode final
+```
+
+이 명령은 다음 순서로 실행된다.
+
+```text
+1. A2C seed 42 전체 25개 구 학습
+2. REINFORCE seed 42 전체 25개 구 학습
+3. Best/Worst 3구 seed 123, 777 추가 학습 및 요약
+```
 
 chronological split 기준 seed 42 전체 학습 로그가 아직 없으면 먼저 아래 두 명령을 실행한다.
 
