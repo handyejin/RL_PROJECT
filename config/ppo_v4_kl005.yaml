@@ -1,0 +1,43 @@
+district: 마포구
+truck:
+  n_trucks: 3
+  capacity: 20
+  speed_kmh: 25.0
+  target_fill_ratio: 0.5
+reward:
+  stockout: -1.0
+  full: -0.8
+  travel_km: -0.008
+  travel_step: -0.002
+env:
+  urgent_low: 0.15
+  urgent_high: 0.85
+  urgent_bonus: 5.0
+  explore_bonus: 1.0
+  strict_urgent_mask: true
+  shaping_scale: 0.5
+  w_work_per_bike: 0.0
+  w_idle_visit: 0.0
+  future_demand_horizon: 0
+algorithm:
+  name: ppo_v4
+training:
+  timesteps: 100000
+  eval_freq: 5000
+  n_train_dates: 20
+  seed: 42
+  tag: ppo_v4_kl005
+evaluation:
+  shaping: false
+ppo_v4:
+  n_steps: 2048
+  batch_size: 64
+  gamma: 0.99
+  n_epochs: 10
+  clip_range: 0.2
+  gae_lambda: 0.95
+  ent_coef: 0.0
+  kl_coef: 0.05
+  net_arch:
+    - 256
+    - 256

@@ -29,6 +29,12 @@ from stable_baselines3.common.monitor import Monitor  # noqa: E402
 
 from src.agents.baselines import get_policy  # noqa: E402
 from src.agents.masked_dqn import MaskableDQN  # noqa: E402
+from src.agents.qrdqn import MaskableQRDQN  # noqa: E402
+from src.agents.ppo import MaskablePPO  # noqa: E402
+from src.agents.ppo_v2 import GradientInformedPPO  # noqa: E402
+from src.agents.ppo_v3 import RewardPrioritizedPPO  # noqa: E402
+from src.agents.ppo_v4 import KLtoBC_PPO  # noqa: E402
+from src.agents.sac import MaskableSAC  # noqa: E402
 from src.envs.data_loader import load_episode  # noqa: E402
 from src.envs.rebalance_env import RebalanceEnv  # noqa: E402
 
@@ -286,9 +292,9 @@ def main() -> None:
 
     # ── Phase 2: 본 parser — default를 yaml에서 (CLI 인자로 override 가능) ──
     parser = argparse.ArgumentParser(parents=[pre])
-    parser.add_argument("--algo", choices=["dqn", "masked_dqn"],
+    parser.add_argument("--algo", choices=["dqn", "masked_dqn", "qrdqn", "ppo", "ppo_v2", "ppo_v3", "ppo_v4", "sac"],
                         default=_get(cfg, "algorithm", "name", default="dqn"),
-                        help="dqn: vanilla, masked_dqn: invalid-action masking (action_masks)")
+                        help="dqn: vanilla, masked_dqn: invalid-action masking (action_masks), qrdqn: quantile regression DQN, ppo: standard PPO with masking, ppo_v2: gradient-informed, ppo_v3: reward-prioritized, ppo_v4: KL-to-BC constrained, sac: soft actor-critic")
     parser.add_argument("--double-q", action="store_true",
                         default=_get(cfg, "algorithm", "double_q", default=False),
                         help="masked_dqn에서 Double DQN 타깃 사용")
@@ -472,27 +478,111 @@ def main() -> None:
         lr_schedule = args.lr
     common_kwargs = dict(
         learning_rate=lr_schedule,
-        buffer_size=args.buffer_size,
-        batch_size=args.batch_size,
-        gamma=args.gamma,
-        exploration_fraction=args.exploration_fraction,
-        exploration_final_eps=args.exploration_final_eps,
-        learning_starts=args.learning_starts,
-        target_update_interval=1000,
-        train_freq=4,
-        gradient_steps=1,
-        policy_kwargs={"net_arch": list(_get(cfg, "dqn", "net_arch", default=[256, 256]))},
         tensorboard_log=str(tb_dir),
         verbose=0,
         seed=args.seed,
     )
-    if args.algo == "masked_dqn":
-        model = MaskableDQN("MlpPolicy", train_env, double_q=args.double_q, **common_kwargs)
+    if args.algo in {"dqn", "masked_dqn", "qrdqn"}:
+        dqn_kwargs = dict(
+            **common_kwargs,
+            buffer_size=args.buffer_size,
+            batch_size=args.batch_size,
+            gamma=args.gamma,
+            exploration_fraction=args.exploration_fraction,
+            exploration_final_eps=args.exploration_final_eps,
+            learning_starts=args.learning_starts,
+            target_update_interval=1000,
+            train_freq=4,
+            gradient_steps=1,
+            policy_kwargs={"net_arch": list(_get(cfg, args.algo if args.algo == "qrdqn" else "dqn", "net_arch", default=[256, 256]))},
+        )
+        if args.algo == "masked_dqn":
+            model = MaskableDQN("MlpPolicy", train_env, double_q=args.double_q, **dqn_kwargs)
+        elif args.algo == "qrdqn":
+            model = MaskableQRDQN(
+                "MlpPolicy",
+                train_env,
+                n_quantiles=_get(cfg, "qrdqn", "n_quantiles", default=200),
+                kappa=_get(cfg, "qrdqn", "kappa", default=1.0),
+                double_q=args.double_q,
+                **dqn_kwargs,
+            )
+        else:
+            model = DQN("MlpPolicy", train_env, **dqn_kwargs)
+    elif args.algo == "ppo":
+        ppo_kwargs = dict(
+            **common_kwargs,
+            n_steps=_get(cfg, "ppo", "n_steps", default=2048),
+            batch_size=_get(cfg, "ppo", "batch_size", default=args.batch_size),
+            gamma=_get(cfg, "ppo", "gamma", default=args.gamma),
+            n_epochs=_get(cfg, "ppo", "n_epochs", default=10),
+            clip_range=_get(cfg, "ppo", "clip_range", default=0.2),
+            gae_lambda=_get(cfg, "ppo", "gae_lambda", default=0.95),
+            policy_kwargs={"net_arch": list(_get(cfg, "ppo", "net_arch", default=[256, 256]))},
+        )
+        model = MaskablePPO("MlpPolicy", train_env, **ppo_kwargs)
+    elif args.algo == "ppo_v2":
+        ppo_v2_kwargs = dict(
+            **common_kwargs,
+            n_steps=_get(cfg, "ppo_v2", "n_steps", default=2048),
+            batch_size=_get(cfg, "ppo_v2", "batch_size", default=args.batch_size),
+            gamma=_get(cfg, "ppo_v2", "gamma", default=args.gamma),
+            n_epochs=_get(cfg, "ppo_v2", "n_epochs", default=10),
+            clip_range=_get(cfg, "ppo_v2", "clip_range", default=0.2),
+            gae_lambda=_get(cfg, "ppo_v2", "gae_lambda", default=0.95),
+            ent_coef=_get(cfg, "ppo_v2", "ent_coef", default=0.01),
+            policy_kwargs={"net_arch": list(_get(cfg, "ppo_v2", "net_arch", default=[256, 256]))},
+        )
+        model = GradientInformedPPO("MlpPolicy", train_env, **ppo_v2_kwargs)
+    elif args.algo == "ppo_v3":
+        ppo_v3_kwargs = dict(
+            **common_kwargs,
+            n_steps=_get(cfg, "ppo_v3", "n_steps", default=2048),
+            batch_size=_get(cfg, "ppo_v3", "batch_size", default=args.batch_size),
+            gamma=_get(cfg, "ppo_v3", "gamma", default=args.gamma),
+            n_epochs=_get(cfg, "ppo_v3", "n_epochs", default=10),
+            clip_range=_get(cfg, "ppo_v3", "clip_range", default=0.2),
+            gae_lambda=_get(cfg, "ppo_v3", "gae_lambda", default=0.95),
+            ent_coef=_get(cfg, "ppo_v3", "ent_coef", default=0.0),
+            policy_kwargs={"net_arch": list(_get(cfg, "ppo_v3", "net_arch", default=[256, 256]))},
+            prioritization_temperature=_get(cfg, "ppo_v3", "prioritization_temperature", default=1.0),
+        )
+        model = RewardPrioritizedPPO("MlpPolicy", train_env, **ppo_v3_kwargs)
+    elif args.algo == "ppo_v4":
+        ppo_v4_kwargs = dict(
+            **common_kwargs,
+            n_steps=_get(cfg, "ppo_v4", "n_steps", default=2048),
+            batch_size=_get(cfg, "ppo_v4", "batch_size", default=args.batch_size),
+            gamma=_get(cfg, "ppo_v4", "gamma", default=args.gamma),
+            n_epochs=_get(cfg, "ppo_v4", "n_epochs", default=10),
+            clip_range=_get(cfg, "ppo_v4", "clip_range", default=0.2),
+            gae_lambda=_get(cfg, "ppo_v4", "gae_lambda", default=0.95),
+            ent_coef=_get(cfg, "ppo_v4", "ent_coef", default=0.0),
+            policy_kwargs={"net_arch": list(_get(cfg, "ppo_v4", "net_arch", default=[256, 256]))},
+            bc_model_path=args.pretrain,
+            kl_coef=_get(cfg, "ppo_v4", "kl_coef", default=1.0),
+        )
+        model = KLtoBC_PPO("MlpPolicy", train_env, **ppo_v4_kwargs)
+    elif args.algo == "sac":
+        sac_kwargs = dict(
+            **common_kwargs,
+            buffer_size=_get(cfg, "sac", "buffer_size", default=100_000),
+            batch_size=_get(cfg, "sac", "batch_size", default=args.batch_size),
+            gamma=_get(cfg, "sac", "gamma", default=args.gamma),
+            learning_starts=_get(cfg, "sac", "learning_starts", default=1000),
+            train_freq=_get(cfg, "sac", "train_freq", default=1),
+            target_update_interval=_get(cfg, "sac", "target_update_interval", default=1),
+            ent_coef=_get(cfg, "sac", "ent_coef", default="auto"),
+            use_sde=_get(cfg, "sac", "use_sde", default=False),
+            policy_kwargs={"net_arch": list(_get(cfg, "sac", "net_arch", default=[256, 256]))},
+        )
+        model = MaskableSAC("MlpPolicy", train_env, **sac_kwargs)
     else:
-        model = DQN("MlpPolicy", train_env, **common_kwargs)
+        raise ValueError(f"unknown algo '{args.algo}'")
 
     # BC pretrain 가중치 로드 — q_net & q_net_target 둘 다 (target도 같은 시작점)
-    if args.pretrain:
+    # SAC는 다른 네트워크 구조이므로 pretrain 미지원 (현재)
+    if args.pretrain and args.algo in {"dqn", "masked_dqn", "qrdqn"}:
         import torch
         from stable_baselines3.common.save_util import load_from_zip_file
         print(f"  [pretrain] loading {args.pretrain}")
@@ -503,9 +593,18 @@ def main() -> None:
         model.policy.q_net.load_state_dict(q_net_state)
         model.policy.q_net_target.load_state_dict(q_net_state)
         print(f"  [pretrain] loaded q_net ({len(q_net_state)} tensors)")
+    elif args.pretrain and args.algo == "ppo_v4":
+        # PPO actor + critic 가중치를 BC로 초기화. KL-to-BC anchor는 별도 보존된
+        # bc_policy를 사용하므로 학습 중 BC 정책은 fixed reference 유지.
+        from stable_baselines3.common.save_util import load_from_zip_file
+        print(f"  [pretrain] loading PPO policy state from {args.pretrain}")
+        _, params, _ = load_from_zip_file(args.pretrain)
+        state = params["policy"]
+        model.policy.load_state_dict(state)
+        print(f"  [pretrain] loaded PPO policy ({len(state)} tensors) — actor 시작점=BC")
 
     history: list[dict] = []
-    if args.algo == "masked_dqn":
+    if args.algo in {"masked_dqn", "qrdqn", "ppo", "ppo_v4", "sac"}:
         eval_callback = MaskedEvalCallback(
             eval_env,
             eval_freq=args.eval_freq,
