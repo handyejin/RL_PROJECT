@@ -105,6 +105,71 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
   --progress
 ```
 
+### 4.1 YAML 파일로 실행하는 방법
+
+Top-K처럼 실험마다 바꾸는 값은 YAML 파일로 관리할 수 있다.
+
+팀원 공통 `config/default.yaml`은 수정하지 않고, 우리 실험 설정은 `config/ours/` 아래에 둔다.
+
+| 파일 | 용도 |
+|---|---|
+| `config/ours/dqn_topk3.yaml` | DQN action 후보를 3개로 줄인 실험 |
+| `config/ours/dqn_topk12.yaml` | 기존 DQN Top-K 12 비교 실험 |
+| `config/ours/reinforce_topk12.yaml` | REINFORCE 보고서 기준 실험 |
+| `config/ours/a2c_topk12.yaml` | A2C 보고서 기준 실험 |
+| `config/ours/ppo_topk12.yaml` | PPO 보고서 기준 실험 |
+
+예를 들어 DQN Top-K 3 실험은 다음처럼 실행한다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+  --config config/ours/dqn_topk3.yaml
+```
+
+YAML 안의 `district`를 바꾸면 다른 구를 실행할 수 있다.
+
+```yaml
+algorithm: dqn
+district: 강남구
+
+candidate_action:
+  top_k: 3
+```
+
+CLI에서 임시로 override할 수도 있다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+  --config config/ours/dqn_topk3.yaml \
+  --district 영등포구 \
+  --candidate-top-k 4
+```
+
+25개 구 전체를 같은 설정으로 돌리고 싶으면 `district: ALL`로 바꾸거나 CLI에서 지정한다.
+
+```bash
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+  --config config/ours/dqn_topk3.yaml \
+  --district ALL
+```
+
+`--dry-run`을 붙이면 실제 학습은 하지 않고 실행될 명령만 확인한다.
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+  --config config/ours/dqn_topk3.yaml \
+  --dry-run
+```
+
+Top-K는 다음 의미를 가진다.
+
+| 값 | 의미 |
+|---:|---|
+| `top_k: 12` | 후보를 넓게 둠. A2C/PPO/REINFORCE 기본 비교에 사용 |
+| `top_k: 3` | 후보를 강하게 줄임. DQN처럼 큰 action space에 약한 알고리즘 점검용 |
+
+즉, Top-K는 단순 출력 옵션이 아니라 **action space 크기를 바꾸는 구조 하이퍼파라미터**다.
+
 REINFORCE는 다음처럼 실행한다.
 
 ```bash

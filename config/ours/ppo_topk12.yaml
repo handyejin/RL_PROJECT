@@ -1,0 +1,39 @@
+# PPO 보고서 기준 설정: MaskablePPO + 보수적 update + Top-K 12
+
+algorithm: ppo
+district: 강남구
+
+data:
+  processed_dir: data/processed_seoul_all
+  forecast_dir: data/forecast_by_gu
+  capacity_path: data/processed/station_capacity.csv
+
+training:
+  total_timesteps: 170000
+  eval_every_timesteps: 20000
+  n_train_dates: 200
+  bc_epochs: 0
+  tag: yaml_ppo_topk12
+  device: cpu
+  progress: true
+
+state:
+  future_mode: forecast_projected_travel
+  future_horizon: 6
+
+candidate_action:
+  top_k: 12
+  mode: forecast_imbalance
+  travel_coef: 0.20
+  zone_mode: static3
+  zone_penalty: 1.0
+  feature_mode: basic
+
+ppo:
+  learning_rate: 0.0001
+  ent_coef: 0.003
+  target_kl: 0.03
+  clip_range: 0.1
+  n_epochs: 5
+  n_steps: 256
+  batch_size: 128

@@ -1,0 +1,30 @@
+# REINFORCE 보고서 기준 설정: Reward-to-Go + Value baseline, BC 없음
+
+algorithm: reinforce
+district: 강남구
+
+data:
+  processed_dir: data/processed_seoul_all
+  forecast_dir: data/forecast_by_gu
+  capacity_path: data/processed/station_capacity.csv
+
+training:
+  episodes: 500
+  eval_every: 50
+  n_train_dates: 200
+  bc_epochs: 0
+  tag: yaml_reinforce_topk12
+  device: cpu
+  progress: true
+
+state:
+  future_mode: forecast_projected_travel
+  future_horizon: 6
+
+candidate_action:
+  top_k: 12
+  mode: forecast_imbalance
+  travel_coef: 0.20
+  zone_mode: static3
+  zone_penalty: 1.0
+  feature_mode: basic

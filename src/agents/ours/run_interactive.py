@@ -8,7 +8,7 @@
     - processed data: data/processed_seoul_all
     - forecast data: data/forecast_by_gu/demand_forecast_1h_{구}.parquet
     - capacity data: data/processed/station_capacity.csv
-    - action 후보: forecast imbalance 기준 Top-K 12
+    - action 후보: YAML/CLI로 지정한 Top-K candidate 설정
     - BC 없음, rollback 없음
     - 대표 평가는 Best checkpoint 기준
     - 진행률 표시: --progress 사용
@@ -131,11 +131,11 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
         "--n-train-dates",
         str(args.n_train_dates),
         "--bc-epochs",
-        "0",
+        str(args.bc_epochs),
         "--future-mode",
-        "forecast_projected_travel",
+        args.future_mode,
         "--future-horizon",
-        "6",
+        str(args.future_horizon),
         "--capacity-path",
         str(capacity_path),
         "--forecast-path",
@@ -143,15 +143,15 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
         "--candidate-top-k",
         str(args.candidate_top_k),
         "--candidate-mode",
-        "forecast_imbalance",
+        args.candidate_mode,
         "--candidate-travel-coef",
-        "0.20",
+        str(args.candidate_travel_coef),
         "--candidate-zone-mode",
-        "static3",
+        args.candidate_zone_mode,
         "--candidate-zone-penalty",
-        "1.0",
+        str(args.candidate_zone_penalty),
         "--candidate-feature-mode",
-        "basic",
+        args.candidate_feature_mode,
         "--tag",
         tag,
         "--device",
@@ -244,7 +244,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-every", type=int, default=50)
     parser.add_argument("--eval-every-timesteps", type=int, default=20_000)
     parser.add_argument("--n-train-dates", type=int, default=200)
+    parser.add_argument("--bc-epochs", type=int, default=0)
+    parser.add_argument("--future-mode", choices=["none", "oracle_net", "oracle_inout", "history_net", "forecast_projected_travel"], default="forecast_projected_travel")
+    parser.add_argument("--future-horizon", type=int, default=6)
     parser.add_argument("--candidate-top-k", type=int, default=12)
+    parser.add_argument("--candidate-mode", choices=["imbalance", "forecast_imbalance"], default="forecast_imbalance")
+    parser.add_argument("--candidate-travel-coef", type=float, default=0.20)
+    parser.add_argument("--candidate-zone-mode", choices=["none", "static3"], default="static3")
+    parser.add_argument("--candidate-zone-penalty", type=float, default=1.0)
+    parser.add_argument("--candidate-feature-mode", choices=["none", "basic"], default="basic")
     parser.add_argument("--ppo-learning-rate", type=float, default=1e-4)
     parser.add_argument("--ppo-ent-coef", type=float, default=0.003)
     parser.add_argument("--ppo-target-kl", type=float, default=0.03)

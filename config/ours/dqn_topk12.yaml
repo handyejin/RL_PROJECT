@@ -1,0 +1,36 @@
+# 기존 비교용 DQN 설정: 보고서 초기 기준인 Top-K 12
+
+algorithm: dqn
+district: 강남구
+
+data:
+  processed_dir: data/processed_seoul_all
+  forecast_dir: data/forecast_by_gu
+  capacity_path: data/processed/station_capacity.csv
+
+training:
+  total_timesteps: 170000
+  eval_every_timesteps: 20000
+  n_train_dates: 200
+  bc_epochs: 0
+  tag: yaml_dqn_topk12
+  device: cpu
+  progress: true
+
+state:
+  future_mode: forecast_projected_travel
+  future_horizon: 6
+
+candidate_action:
+  top_k: 12
+  mode: forecast_imbalance
+  travel_coef: 0.20
+  zone_mode: static3
+  zone_penalty: 1.0
+  feature_mode: basic
+
+dqn:
+  reward_scale: 0.01
+  exploration_initial_eps: 0.3
+  exploration_fraction: 0.2
+  exploration_final_eps: 0.02

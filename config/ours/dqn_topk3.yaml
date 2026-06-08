@@ -1,0 +1,39 @@
+# 우리 수정 state + 후보 action DQN 실험 설정
+#
+# Top-K는 전체 정류소 action을 현재 후보 K개 rank action으로 줄이는
+# 구조 하이퍼파라미터다. DQN은 큰 action space에서 흔들려, 작은 K를 먼저 비교한다.
+
+algorithm: dqn
+district: 강남구
+
+data:
+  processed_dir: data/processed_seoul_all
+  forecast_dir: data/forecast_by_gu
+  capacity_path: data/processed/station_capacity.csv
+
+training:
+  total_timesteps: 170000
+  eval_every_timesteps: 20000
+  n_train_dates: 200
+  bc_epochs: 0
+  tag: yaml_dqn_topk3
+  device: cpu
+  progress: true
+
+state:
+  future_mode: forecast_projected_travel
+  future_horizon: 6
+
+candidate_action:
+  top_k: 3
+  mode: forecast_imbalance
+  travel_coef: 0.20
+  zone_mode: static3
+  zone_penalty: 1.0
+  feature_mode: basic
+
+dqn:
+  reward_scale: 0.01
+  exploration_initial_eps: 0.3
+  exploration_fraction: 0.2
+  exploration_final_eps: 0.02
