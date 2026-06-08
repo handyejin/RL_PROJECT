@@ -73,18 +73,28 @@ ALGO_MODULE = {
     "ppo": "src.agents.ours.common.ppo_core",
     "ppo_v4": "src.agents.ours.common.ppo_core",
     "qrdqn": "src.agents.ours.common.qrdqn_core",
+    "dqn": "src.agents.ours.algorithms.dqn.core",
+    "dqn_small": "src.agents.ours.common.dqn_small_core",
 }
 
 # SB3 기반 알고리즘 (timesteps 단위로 학습)
-SB3_ALGOS = {"ppo", "ppo_v4", "qrdqn"}
+SB3_ALGOS = {"ppo", "ppo_v4", "qrdqn", "dqn", "dqn_small"}
 
-# 5개 알고리즘 메뉴 옵션
+# 축소 환경 전용 알고리즘 (candidate Top-K / split-mode 등 미사용)
+SMALL_ENV_ALGOS = {"dqn_small"}
+
+# --split-mode 옵션을 지원하지 않는 알고리즘
+NO_SPLIT_MODE_ALGOS = {"dqn", "dqn_small"}
+
+# 메뉴 옵션
 ALGO_MENU = [
     ("1", "reinforce", "REINFORCE (ours core)"),
     ("2", "a2c", "A2C (ours core)"),
     ("3", "ppo", "PPO (MaskablePPO via ours core)"),
     ("4", "ppo_v4", "PPO_V4 KL-to-BC (ours core)"),
     ("5", "qrdqn", "QRDQN (MaskableQRDQN via ours core)"),
+    ("6", "dqn", "DQN (Masked + Double + Dueling)"),
+    ("7", "dqn_small", "DQN-small (15정류소·트럭1·forecast)"),
 ]
 ALGO_CHOICES = [algo for _, algo, _ in ALGO_MENU]
 
@@ -163,6 +173,31 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
     processed_dir = project_path(args.processed_dir)
     capacity_path = project_path(args.capacity_path)
 
+    if args.algorithm in SMALL_ENV_ALGOS:
+        # 축소 환경 (top-N 정류소 + 트럭 1대) — candidate-* / split-mode 등 미사용.
+        tag = f"{args.tag}_{args.algorithm}_{district}"
+        cmd = [
+            sys.executable,
+            "-m",
+            module,
+            "--processed-dir", str(processed_dir),
+            "--district", district,
+            "--total-timesteps", str(args.timesteps),
+            "--eval-every", str(args.eval_freq),
+            "--n-train-dates", str(args.n_train_dates),
+            "--seed", str(args.seed),
+            "--bc-epochs", "0",
+            "--future-mode", "forecast_projected_travel",
+            "--future-horizon", "6",
+            "--capacity-path", str(capacity_path),
+            "--forecast-path", str(forecast_path),
+            "--max-stations", str(args.max_stations),
+            "--n-trucks", str(args.n_trucks),
+            "--tag", tag,
+            "--device", args.device,
+        ]
+        return cmd
+
     if args.algorithm in SB3_ALGOS:
         # SB3 알고리즘은 timestep 단위 — 공통 wrapper 옵션은 reinforce/a2c 와 동일.
         tag = f"{args.tag}_{district}"
@@ -208,9 +243,9 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
             tag,
             "--device",
             args.device,
-            "--split-mode",
-            args.split_mode,
         ]
+        if args.algorithm not in NO_SPLIT_MODE_ALGOS:
+            cmd += ["--split-mode", args.split_mode]
         # PPO 계열: Top-K 후보 환경에서 policy 가 과도하게 흔들리지 않도록
         # 보수적 하이퍼파라미터를 적용한다 (실험 보고서 PPO 스펙).
         if args.algorithm in {"ppo", "ppo_v4"}:
@@ -326,11 +361,16 @@ def parse_args() -> argparse.Namespace:
                         help="reinforce/a2c 학습 episode 수")
     parser.add_argument("--eval-every", type=int, default=50,
                         help="reinforce/a2c 평가 주기 (episodes)")
-    # ppo/ppo_v4/qrdqn 학습 길이 (env step 단위)
+    # ppo/ppo_v4/qrdqn/dqn_small 학습 길이 (env step 단위)
     parser.add_argument("--timesteps", type=int, default=100_000,
-                        help="ppo/ppo_v4/qrdqn 학습 timesteps")
+                        help="ppo/ppo_v4/qrdqn/dqn_small 학습 timesteps")
     parser.add_argument("--eval-freq", type=int, default=5_000,
-                        help="ppo/ppo_v4/qrdqn 평가 주기 (env steps)")
+                        help="ppo/ppo_v4/qrdqn/dqn_small 평가 주기 (env steps)")
+    # dqn_small 전용 (축소 환경)
+    parser.add_argument("--max-stations", type=int, default=15,
+                        help="dqn_small: top-N 불균형 정류소만 사용")
+    parser.add_argument("--n-trucks", type=int, default=1,
+                        help="dqn_small: 트럭 수")
     parser.add_argument("--seed", type=int, default=42,
                         help="ppo/ppo_v4/qrdqn 학습 seed")
     parser.add_argument("--n-train-dates", type=int, default=200)
@@ -349,7 +389,7 @@ def main() -> None:
         args.algorithm = choose_algorithm()
     if not args.district:
         args.district = choose_district()
-    if not args.split_mode:
+    if not args.split_mode and args.algorithm not in NO_SPLIT_MODE_ALGOS:
         args.split_mode = choose_split_mode()
 
     districts = DISTRICTS if args.district.upper() == "ALL" else [args.district]
