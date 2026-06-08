@@ -559,6 +559,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """데이터 로드, agent-local 보강, 학습, 7일 평가를 순서대로 실행한다."""
     args = parse_args()
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
     device = torch.device("mps" if args.device == "auto" and torch.backends.mps.is_available() else "cpu")
     if args.device in {"cpu", "mps"}:
         device = torch.device(args.device)

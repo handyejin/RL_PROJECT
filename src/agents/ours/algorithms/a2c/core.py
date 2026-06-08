@@ -657,6 +657,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """데이터 준비부터 BC 선택 적용, A2C 학습, best/final 평가까지 수행한다."""
     args = parse_args()
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
     device = torch.device("mps" if args.device == "auto" and torch.backends.mps.is_available() else "cpu")
     if args.device in {"cpu", "mps"}:
         device = torch.device(args.device)

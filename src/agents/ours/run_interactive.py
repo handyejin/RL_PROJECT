@@ -114,6 +114,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-every", type=int, default=DEFAULT_RUNNER_VALUES["eval_every"])
     parser.add_argument("--eval-every-timesteps", type=int, default=DEFAULT_RUNNER_VALUES["eval_every_timesteps"])
     parser.add_argument("--n-train-dates", type=int, default=DEFAULT_RUNNER_VALUES["n_train_dates"])
+    parser.add_argument("--seed", type=int, default=DEFAULT_RUNNER_VALUES["seed"])
     parser.add_argument(
         "--split-mode",
         choices=["random", "chronological"],

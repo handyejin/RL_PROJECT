@@ -87,6 +87,7 @@ def build_args(config: dict[str, Any], cli: argparse.Namespace) -> SimpleNamespa
             "eval_every": "eval_every",
             "eval_every_timesteps": "eval_every_timesteps",
             "n_train_dates": "n_train_dates",
+            "seed": "seed",
             "split_mode": "split_mode",
             "bc_epochs": "bc_epochs",
             "tag": "tag",
@@ -153,6 +154,8 @@ def build_args(config: dict[str, Any], cli: argparse.Namespace) -> SimpleNamespa
         cli_value = getattr(cli, key, None)
         if cli_value:
             values[key] = cli_value
+    if cli.seed is not None:
+        values["seed"] = cli.seed
     if cli.candidate_top_k is not None:
         values["candidate_top_k"] = cli.candidate_top_k
     if cli.dry_run:
@@ -170,6 +173,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-top-k", type=int, default=None, help="YAML top_k override.")
     parser.add_argument("--tag", default="", help="YAML tag override.")
     parser.add_argument("--device", choices=["auto", "cpu", "mps"], default="")
+    parser.add_argument("--seed", type=int, default=None, help="YAML seed override.")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
