@@ -1,0 +1,45 @@
+district: 마포구
+truck:
+  n_trucks: 3
+  capacity: 20
+  speed_kmh: 25.0
+  target_fill_ratio: 0.5
+reward:
+  stockout: -1.0
+  full: -0.8
+  travel_km: -0.008
+  travel_step: -0.002
+env:
+  urgent_low: 0.15
+  urgent_high: 0.85
+  urgent_bonus: 5.0
+  explore_bonus: 1.0
+  strict_urgent_mask: true
+  shaping_scale: 0.5
+  w_work_per_bike: 0.0
+  w_idle_visit: 0.0
+  future_demand_horizon: 0
+  top_k: 0
+algorithm:
+  name: qrdqn
+training:
+  timesteps: 10000
+  eval_freq: 2000
+  n_train_dates: 20
+  seed: 42
+  tag: qrdqn_base_10k
+evaluation:
+  shaping: false
+qrdqn:
+  n_quantiles: 200
+  learning_rate: 1e-4
+  buffer_size: 100000
+  batch_size: 64
+  gamma: 0.99
+  exploration_fraction: 0.3
+  exploration_final_eps: 0.05
+  learning_starts: 1000
+  kappa: 1.0
+  net_arch:
+    - 256
+    - 256
