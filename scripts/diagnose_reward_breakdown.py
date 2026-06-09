@@ -28,11 +28,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agents.baselines import get_policy  # noqa: E402
 from src.agents.masked_dqn import MaskableDQN  # noqa: E402
-from src.agents.ours.common.data_overrides import (  # noqa: E402
+from src.agents.common.data_overrides import (  # noqa: E402
     apply_capacity_override,
     attach_forecast_override,
 )
-from src.agents.ours.common import dqn_small_core as core  # noqa: E402
+from src.agents.algorithms.dqn_small import core as core  # noqa: E402
 
 
 METRIC_KEYS = ["cum_stockout", "cum_full", "cum_travel_km", "cum_travel_steps"]

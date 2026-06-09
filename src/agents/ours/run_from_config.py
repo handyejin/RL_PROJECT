@@ -28,7 +28,7 @@ from typing import Any
 
 import yaml
 
-from src.agents.ours.common.runner_config import (
+from src.agents.common.runner_config import (
     DEFAULT_RUNNER_VALUES,
     PROJECT_ROOT,
     build_training_command,

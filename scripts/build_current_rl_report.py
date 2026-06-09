@@ -23,7 +23,7 @@ from matplotlib.patches import Polygon
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.agents.ours.algorithms.reinforce.core import EVAL_DATES
+from src.agents.common.experiment_utils import EVAL_DATES
 DISTRICTS = [
     "강남구",
     "강동구",

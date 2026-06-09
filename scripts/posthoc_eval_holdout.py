@@ -37,7 +37,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.agents.ours.common import dqn_small_core as C  # noqa: E402
+from src.agents.algorithms.dqn_small import core as C  # noqa: E402
 from src.agents.masked_dqn import MaskableDQN  # noqa: E402
 from src.envs.data_loader import load_episode  # noqa: E402
 

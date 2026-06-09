@@ -32,13 +32,13 @@ ROOT = Path(__file__).resolve().parents[1]
 SEEDS = [42, 123, 777]
 EXPERIMENTS = {
     "a2c": {
-        "module": "src.agents.ours.algorithms.a2c.core",
+        "module": "src.agents.algorithms.a2c.core",
         "log_prefix": "actor_critic",
         "best": ["강서구", "강남구", "노원구"],
         "worst": ["관악구", "은평구", "서대문구"],
     },
     "reinforce": {
-        "module": "src.agents.ours.algorithms.reinforce.core",
+        "module": "src.agents.algorithms.reinforce.core",
         "log_prefix": "reinforce",
         "best": ["양천구", "강남구", "광진구"],
         "worst": ["강서구", "마포구", "강동구"],

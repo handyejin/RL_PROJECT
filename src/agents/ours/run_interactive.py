@@ -4,12 +4,14 @@
     팀원이 내부 core 옵션을 모두 외우지 않아도, 알고리즘과 구만 선택해서
     실험을 실행할 수 있게 한다.
 
-알고리즘 → core 모듈 매핑 (모두 src.agents.ours.common.* 아래):
-    - REINFORCE  → reinforce_core
-    - A2C        → a2c_core
-    - PPO        → ppo_core         (--algo ppo)
-    - PPO_V4     → ppo_core         (--algo ppo_v4, KL-to-BC)
-    - QRDQN      → qrdqn_core
+알고리즘 → core 모듈 매핑 (모두 src.agents.algorithms.<name>.core):
+    - REINFORCE  → algorithms.reinforce.core
+    - A2C        → algorithms.a2c.core
+    - PPO        → algorithms.ppo.core      (--algo ppo)
+    - PPO_V4     → algorithms.ppo.core      (--algo ppo_v4, KL-to-BC)
+    - QRDQN      → algorithms.qrdqn.core
+    - DQN        → algorithms.dqn.core
+    - DQN_SMALL  → algorithms.dqn_small.core
 
 5개 알고리즘이 모두 동일한 ours 환경(forecast + capacity + Top-K 후보)을 사용하므로,
 실행 지역 'ALL' 선택 시 25개 구를 순차적으로 학습한다. 알고리즘만 swap 되고
@@ -68,13 +70,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # 알고리즘별 ours core 모듈 매핑
 ALGO_MODULE = {
-    "reinforce": "src.agents.ours.common.reinforce_core",
-    "a2c": "src.agents.ours.common.a2c_core",
-    "ppo": "src.agents.ours.common.ppo_core",
-    "ppo_v4": "src.agents.ours.common.ppo_core",
-    "qrdqn": "src.agents.ours.common.qrdqn_core",
-    "dqn": "src.agents.ours.algorithms.dqn.core",
-    "dqn_small": "src.agents.ours.common.dqn_small_core",
+    "reinforce": "src.agents.algorithms.reinforce.core",
+    "a2c": "src.agents.algorithms.a2c.core",
+    "ppo": "src.agents.algorithms.ppo.core",
+    "ppo_v4": "src.agents.algorithms.ppo.core",
+    "qrdqn": "src.agents.algorithms.qrdqn.core",
+    "dqn": "src.agents.algorithms.dqn.core",
+    "dqn_small": "src.agents.algorithms.dqn_small.core",
 }
 
 # SB3 기반 알고리즘 (timesteps 단위로 학습)
@@ -157,7 +159,7 @@ def choose_split_mode() -> str:
 def build_command(args: argparse.Namespace, district: str) -> list[str]:
     """선택한 알고리즘/구에 맞는 실행 명령을 만든다.
 
-    모든 알고리즘은 ours/common core 모듈을 -m 모드로 실행하며,
+    모든 알고리즘은 algorithms/<name>/core 모듈을 -m 모드로 실행하며,
     forecast/capacity/Top-K 후보 wrapper 옵션을 동일하게 전달한다.
     REINFORCE/A2C 는 episode 단위, PPO/PPO_V4/QRDQN 은 timestep 단위로 학습 길이를 설정한다.
 
