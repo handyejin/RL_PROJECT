@@ -84,7 +84,7 @@ SB3_ALGOS = {"ppo", "ppo_v4", "qrdqn", "dqn", "dqn_small"}
 SMALL_ENV_ALGOS = {"dqn_small"}
 
 # --split-mode 옵션을 지원하지 않는 알고리즘
-NO_SPLIT_MODE_ALGOS = {"dqn", "dqn_small"}
+NO_SPLIT_MODE_ALGOS = {"dqn"}
 
 # 메뉴 옵션
 ALGO_MENU = [
@@ -174,7 +174,7 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
     capacity_path = project_path(args.capacity_path)
 
     if args.algorithm in SMALL_ENV_ALGOS:
-        # 축소 환경 (top-N 정류소 + 트럭 1대) — candidate-* / split-mode 등 미사용.
+        # 축소 환경 (top-N 정류소 + 트럭 1대) — candidate-* 는 미사용, split-mode 는 전달.
         tag = f"{args.tag}_{args.algorithm}_{district}"
         cmd = [
             sys.executable,
@@ -193,6 +193,7 @@ def build_command(args: argparse.Namespace, district: str) -> list[str]:
             "--forecast-path", str(forecast_path),
             "--max-stations", str(args.max_stations),
             "--n-trucks", str(args.n_trucks),
+            "--split-mode", args.split_mode or "random",
             "--tag", tag,
             "--device", args.device,
         ]
