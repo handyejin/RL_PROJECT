@@ -44,11 +44,11 @@ DISTRICTS = [
 ]
 
 ALGORITHM_MODULES = {
-    "reinforce": "src.agents.ours.algorithms.reinforce.core",
-    "a2c": "src.agents.ours.algorithms.a2c.core",
-    "dqn": "src.agents.ours.algorithms.dqn.core",
-    "ppo": "src.agents.ours.algorithms.ppo.core",
-    "bandit": "src.agents.ours.algorithms.bandit.core",
+    "reinforce": "src.agents.algorithms.reinforce.core",
+    "a2c": "src.agents.algorithms.a2c.core",
+    "dqn": "src.agents.algorithms.dqn.core",
+    "ppo": "src.agents.algorithms.ppo.core",
+    "bandit": "src.agents.algorithms.bandit.core",
 }
 
 # YAML에서 값이 빠졌을 때만 쓰는 fallback이다. 보고서 기준 설정은

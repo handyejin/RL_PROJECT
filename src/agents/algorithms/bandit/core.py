@@ -47,9 +47,9 @@ from pathlib import Path
 import numpy as np
 from tqdm.auto import tqdm
 
-from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
-from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
-from src.agents.ours.common.experiment_utils import (
+from src.agents.common.candidate_actions import maybe_wrap_candidate_actions
+from src.agents.common.data_overrides import apply_capacity_override, attach_forecast_override
+from src.agents.common.experiment_utils import (
     ENV_KW,
     EVAL_DATES,
     TRAIN_DATES,
@@ -57,8 +57,8 @@ from src.agents.ours.common.experiment_utils import (
     load_rebalance_episodes as load_episodes,
     print_eval_table,
 )
-from src.agents.ours.common.future_demand import build_history_net_profile, maybe_wrap_future_demand
-from src.agents.ours.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
+from src.agents.common.future_demand import build_history_net_profile, maybe_wrap_future_demand
+from src.agents.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
 from src.envs.rebalance_env import RebalanceEnv
 
 

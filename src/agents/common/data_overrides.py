@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.agents.ours.common.future_demand import DemandForecastProvider
+from src.agents.common.future_demand import DemandForecastProvider
 
 
 def _has_path(value: str | None) -> bool:

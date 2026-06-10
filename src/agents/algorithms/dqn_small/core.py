@@ -19,7 +19,7 @@
     Double DQN, 7일 평가)는 dqn_core와 동일한 wrapper/헬퍼를 재사용한다.
 
 실행 예:
-    PYTHONPATH=. python -m src.agents.ours.common.dqn_small_core \\
+    PYTHONPATH=. python -m src.agents.algorithms.dqn_small.core \\
         --district 영등포구 --processed-dir data/processed_seoul_all \\
         --forecast-path data/forecast_by_gu/demand_forecast_1h_영등포구.parquet \\
         --max-stations 15 --n-trucks 1 --total-timesteps 400000
@@ -39,15 +39,15 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.agents.baselines import get_policy
-from src.agents.ours.common.bc_utils import collect_bc_data
-from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
-from src.agents.ours.common.date_split import compute_split
-from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
-from src.agents.ours.common.future_demand import maybe_wrap_future_demand
-from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
+from src.agents.common.bc_utils import collect_bc_data
+from src.agents.common.candidate_actions import maybe_wrap_candidate_actions
+from src.agents.common.date_split import compute_split
+from src.agents.common.data_overrides import apply_capacity_override, attach_forecast_override
+from src.agents.common.future_demand import maybe_wrap_future_demand
+from src.agents.common.reward_shaping import maybe_wrap_agent_reward_shaping
 from src.agents.masked_dqn import MaskableDQN
-from src.agents.ours.common.stochastic_env import StochasticRebalanceEnv
-from src.agents.ours.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
+from src.agents.common.stochastic_env import StochasticRebalanceEnv
+from src.agents.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
 from src.envs.data_loader import EpisodeData, load_episode
 from src.envs.rebalance_env import RebalanceEnv
 
@@ -323,6 +323,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bc-log-every", type=int, default=5)
     parser.add_argument("--max-bc-grad-norm", type=float, default=10.0)
     parser.add_argument("--bc-only", action="store_true")
+    parser.add_argument("--bc-policy", default="future_heuristic",
+                        choices=["future_heuristic", "forecast_heuristic", "masked_heuristic"],
+                        help="BC teacher 정책 (future_heuristic=SLA류 forecast lookahead)")
+    parser.add_argument("--bc-dates", type=int, default=None,
+                        help="BC 데이터 수집에 쓸 학습일수 (None이면 전체 train pool)")
     # ── state 보강 / capacity / forecast ─────────────────────────────
     parser.add_argument("--future-mode", default="forecast_projected_travel")
     parser.add_argument("--future-horizon", type=int, default=6)

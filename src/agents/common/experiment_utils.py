@@ -13,7 +13,7 @@ from typing import Callable
 import numpy as np
 
 from src.agents.baselines import get_policy
-from src.agents.ours.common.episode_cache import load_episodes_cached
+from src.agents.common.episode_cache import load_episodes_cached
 from src.envs.data_loader import load_episode
 from src.envs.rebalance_env import RebalanceEnv
 
