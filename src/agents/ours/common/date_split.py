@@ -1,7 +1,7 @@
 """학습/평가용 train/eval 날짜 분할 helper.
 
-5개 알고리즘 core (reinforce/a2c/ppo/qrdqn) 가 동일한 분할 변수
-(seed=42, 80/20 비율, 1년 = 365일, EVAL_DATES = eval pool 상위 7일)
+ours 알고리즘 core들이 동일한 분할 변수
+(seed=42, 80/20 비율, 1년 = 365일, EVAL_DATES = eval pool 전체)
 를 공유한다. 분할 mode 만 외부에서 선택할 수 있도록 함수로 분리한다.
 
 지원 mode:
@@ -17,7 +17,7 @@
 두 mode 모두 다음 변수는 동일하게 유지한다:
     seed = 42
     train_ratio = 0.8 → train 292일, eval pool 73일
-    EVAL_DATES = sorted(eval_pool[:7])  → 실제 평가에 쓰이는 7일
+    EVAL_DATES = sorted(eval_pool)  → 실제 평가에 쓰이는 holdout 전체 기간
 """
 
 from __future__ import annotations
@@ -46,11 +46,13 @@ def compute_split(
     start: str = "2025-01-01",
     end: str = "2025-12-31",
     train_ratio: float = 0.8,
-    n_eval: int = 7,
+    n_eval: int | None = None,
 ) -> tuple[list[str], list[str]]:
     """선택된 mode 로 (TRAIN_DATES, EVAL_DATES) 를 만든다.
 
-    EVAL_DATES 는 두 mode 모두 eval pool 상위 n_eval 일을 정렬해 사용한다.
+    EVAL_DATES 는 두 mode 모두 eval pool 을 정렬해 사용한다. n_eval 이 None
+    이면 eval pool 전체(chronological 기준 2025-10-20~2025-12-31)를
+    평가에 쓰고, 정수면 상위 n_eval 일만 평가에 쓴다.
     """
     dates = date_range(start, end)
     n_train = int(len(dates) * train_ratio)
@@ -67,5 +69,5 @@ def compute_split(
     else:
         raise ValueError(f"unknown split mode: {mode!r}")
 
-    eval_dates = sorted(eval_pool[:n_eval])
+    eval_dates = sorted(eval_pool if n_eval is None else eval_pool[:n_eval])
     return train_dates, eval_dates

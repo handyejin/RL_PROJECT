@@ -34,7 +34,7 @@ ALL_DATES = date_range("2025-01-01", "2025-12-31")
 RNG.shuffle(ALL_DATES)
 N_TRAIN = int(len(ALL_DATES) * 0.8)
 TRAIN_DATES = ALL_DATES[:N_TRAIN]
-EVAL_DATES = sorted(ALL_DATES[N_TRAIN:N_TRAIN + 7])
+EVAL_DATES = sorted(ALL_DATES[N_TRAIN:])
 
 
 # 모든 ours agent가 같은 평가 reward를 쓰도록 환경 기본값을 한 곳에 둔다.
@@ -95,9 +95,9 @@ def print_eval_table(
     model_rewards: list[float],
     eval_dates: list[str] | None = None,
 ) -> None:
-    """고정 7일 평가 결과를 baseline과 나란히 출력한다."""
+    """평가 결과를 baseline과 나란히 출력한다."""
     dates = eval_dates or EVAL_DATES
-    print(f"\n=== {label} vs 휴리스틱 (7일) ===")
+    print(f"\n=== {label} vs 휴리스틱 ({len(dates)}일) ===")
     print(f"{'날짜':12}{'휴리스틱':>10}{'모델':>10}{'Δ(M-휴)':>9}")
     for date, h, r in zip(dates, heuristic_rewards, model_rewards):
         print(f"{date:12}{h:>10.1f}{r:>10.1f}{r - h:>9.1f}")

@@ -79,7 +79,8 @@ def build_cmd(algorithm: str, district: str, seed: int, args: argparse.Namespace
     """알고리즘 core 실행 명령을 만든다."""
     module = EXPERIMENTS[algorithm]["module"]
     split_part = "" if args.split_mode == "random" else f"{args.split_mode}_"
-    tag = f"seedci_{split_part}{algorithm}_{district}_s{seed}"
+    topk_part = f"_topk{args.candidate_top_k}" if args.include_topk_in_tag else ""
+    tag = f"{args.experiment_label}_{split_part}{algorithm}_{district}{topk_part}_s{seed}"
     return [
         sys.executable,
         "-m",
@@ -133,7 +134,8 @@ def history_path(algorithm: str, district: str, seed: int, args: argparse.Namesp
     """core가 저장하는 history.npy 경로를 계산한다."""
     prefix = EXPERIMENTS[algorithm]["log_prefix"]
     split_part = "" if args.split_mode == "random" else f"{args.split_mode}_"
-    tag = f"seedci_{split_part}{algorithm}_{district}_s{seed}"
+    topk_part = f"_topk{args.candidate_top_k}" if args.include_topk_in_tag else ""
+    tag = f"{args.experiment_label}_{split_part}{algorithm}_{district}{topk_part}_s{seed}"
     return ROOT / "logs" / f"{prefix}_{tag}" / "history.npy"
 
 
@@ -205,6 +207,68 @@ def parse_seed_list(raw: str) -> list[int]:
         if part:
             seeds.append(int(part))
     return seeds
+
+
+def parse_csv_values(raw: str) -> list[str]:
+    """쉼표로 구분된 문자열을 빈 값 없이 리스트로 변환한다."""
+    return [part.strip() for part in str(raw).split(",") if part.strip()]
+
+
+def selected_experiment_groups(args: argparse.Namespace) -> dict[str, dict[str, list[str]]]:
+    """CLI 옵션에 맞춰 seed sensitivity 대상 알고리즘/구 묶음을 만든다.
+
+    기본값은 기존 보고서용 A2C+REINFORCE Best/Worst 3구 실험이다. 다만
+    Top-K confirmation 뒤의 seed 검증처럼 특정 알고리즘과 특정 구 목록만
+    검증하고 싶을 때 `--algorithms a2c --districts ...`로 범위를 좁힌다.
+    """
+    algorithms = parse_csv_values(args.algorithms) or list(EXPERIMENTS)
+    selected: dict[str, dict[str, list[str]]] = {}
+    for algorithm in algorithms:
+        if algorithm not in EXPERIMENTS:
+            raise ValueError(f"지원하지 않는 알고리즘입니다: {algorithm}")
+        if args.districts:
+            selected[algorithm] = {"selected": parse_csv_values(args.districts)}
+        else:
+            selected[algorithm] = {
+                "best": list(EXPERIMENTS[algorithm]["best"]),
+                "worst": list(EXPERIMENTS[algorithm]["worst"]),
+            }
+    return selected
+
+
+def load_baseline_by_district() -> dict[str, float]:
+    """현재 chronological 결과표를 우선 사용해 구별 baseline reward를 읽는다."""
+    chronological_path = ROOT / "docs" / "chronological_a2c_reinforce_comparison_current.csv"
+    if chronological_path.exists():
+        df = pd.read_csv(chronological_path)
+        return df.drop_duplicates("district").set_index("district")["baseline"].to_dict()
+
+    current_path = ROOT / "docs" / "rl_current_gu_algorithm_summary.csv"
+    df = pd.read_csv(current_path)
+    return df.drop_duplicates("district").set_index("district")["baseline_reward"].to_dict()
+
+
+def compute_baseline_by_district(districts: list[str], args: argparse.Namespace) -> dict[str, float]:
+    """현재 split 기준 holdout 전체에서 MostImbalanced baseline을 다시 계산한다."""
+    from src.agents.ours.algorithms.a2c.core import evaluate_heuristic, load_episodes
+    from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
+    from src.agents.ours.common.date_split import compute_split
+
+    _, eval_dates = compute_split(args.split_mode, seed=args.base_seed)
+    out: dict[str, float] = {}
+    for district in districts:
+        episodes = load_episodes(
+            eval_dates,
+            district,
+            str(ROOT / "data" / "processed_seoul_all"),
+            "data/episode_cache",
+            f"baseline {district} load eval" if not args.dry_run else None,
+        )
+        apply_capacity_override(episodes, str(ROOT / "data" / "processed" / "station_capacity.csv"), 0.5)
+        attach_forecast_override(episodes, str(ROOT / "data" / "forecast_by_gu" / f"demand_forecast_1h_{district}.parquet"))
+        mean, _ = evaluate_heuristic(episodes, args.base_seed)
+        out[district] = float(mean)
+    return out
 
 
 def summarize(rows: list[dict], out_prefix: Path, args: argparse.Namespace) -> None:
@@ -283,6 +347,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split-mode", choices=["random", "chronological"], default="chronological")
     parser.add_argument("--base-seed", type=int, default=DEFAULT_BASE_SEED)
     parser.add_argument(
+        "--algorithms",
+        default="a2c,reinforce",
+        help="seed 반복 실험 대상 알고리즘. 예: a2c 또는 a2c,reinforce",
+    )
+    parser.add_argument(
+        "--districts",
+        default="",
+        help="쉼표로 지정한 구만 실험한다. 비우면 기존 Best/Worst 3구 묶음을 사용한다.",
+    )
+    parser.add_argument(
+        "--experiment-label",
+        default="seedci",
+        help="로그 태그 접두어. 서로 다른 seed 실험이 덮어쓰이지 않게 구분한다.",
+    )
+    parser.add_argument(
+        "--include-topk-in-tag",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="로그 태그에 topk 값을 포함한다.",
+    )
+    parser.add_argument(
+        "--recompute-baseline",
+        action="store_true",
+        help="CSV 대신 현재 split holdout 전체에서 MostImbalanced baseline을 다시 계산한다.",
+    )
+    parser.add_argument(
         "--additional-seeds",
         default=",".join(map(str, DEFAULT_ADDITIONAL_SEEDS)),
         help="쉼표 구분 예: 123,777",
@@ -303,14 +393,19 @@ def main() -> None:
     additional_seeds = parse_seed_list(args.additional_seeds)
     all_seeds = [args.base_seed, *additional_seeds]
     seeds_to_run = additional_seeds if args.use_existing_seed42 else all_seeds
-    baselines = pd.read_csv(ROOT / "docs" / "rl_current_gu_algorithm_summary.csv")
-    baseline_by_district = baselines.drop_duplicates("district").set_index("district")["baseline_reward"].to_dict()
+    experiments = selected_experiment_groups(args)
+    all_districts = sorted({district for groups in experiments.values() for districts in groups.values() for district in districts})
+    baseline_by_district = (
+        compute_baseline_by_district(all_districts, args)
+        if args.recompute_baseline and not args.dry_run
+        else load_baseline_by_district()
+    )
 
     if args.use_existing_seed42 and not args.dry_run:
         missing_base = []
-        for algorithm, spec in EXPERIMENTS.items():
-            for group in ["best", "worst"]:
-                for district in spec[group]:
+        for algorithm, groups in experiments.items():
+            for districts in groups.values():
+                for district in districts:
                     if not result_path(algorithm, district, args.base_seed, args).exists():
                         missing_base.append(result_path(algorithm, district, args.base_seed, args).relative_to(ROOT))
         if missing_base:
@@ -323,11 +418,11 @@ def main() -> None:
             print("\n대안: seed42도 Best/Worst 구만 새로 돌리려면 --no-use-existing-seed42를 사용하세요.", flush=True)
             raise SystemExit(2)
 
-    total = sum((len(spec["best"]) + len(spec["worst"])) * len(seeds_to_run) for spec in EXPERIMENTS.values())
+    total = sum(sum(len(districts) for districts in groups.values()) * len(seeds_to_run) for groups in experiments.values())
     run_index = 0
-    for algorithm, spec in EXPERIMENTS.items():
-        for group in ["best", "worst"]:
-            for district in spec[group]:
+    for algorithm, groups in experiments.items():
+        for group, districts in groups.items():
+            for district in districts:
                 for seed in seeds_to_run:
                     run_index += 1
                     path = history_path(algorithm, district, seed, args)
@@ -348,9 +443,9 @@ def main() -> None:
         return
 
     rows = []
-    for algorithm, spec in EXPERIMENTS.items():
-        for group in ["best", "worst"]:
-            for district in spec[group]:
+    for algorithm, groups in experiments.items():
+        for group, districts in groups.items():
+            for district in districts:
                 baseline = float(baseline_by_district[district])
                 for seed in all_seeds:
                     rows.append(read_result(algorithm, group, district, seed, baseline, args))

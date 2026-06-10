@@ -43,6 +43,11 @@ DISTRICTS = [
     "중랑구",
 ]
 
+# 최종 chronological split의 A2C 결과 기준 Best/Worst 3개 구.
+# Top-K, VAE, episode 수 ablation을 전체 25개 구 대신 빠르게 비교할 때 사용한다.
+A2C_BEST3_DISTRICTS = ["마포구", "영등포구", "노원구"]
+A2C_WORST3_DISTRICTS = ["은평구", "서대문구", "관악구"]
+
 ALGORITHM_MODULES = {
     "reinforce": "src.agents.ours.algorithms.reinforce.core",
     "a2c": "src.agents.ours.algorithms.a2c.core",
@@ -111,8 +116,24 @@ def project_path(path: str | Path) -> Path:
 
 
 def selected_districts(district: str) -> list[str]:
-    """`ALL`이면 25개 구 전체, 아니면 입력한 구 하나를 반환한다."""
-    return DISTRICTS if str(district).upper() == "ALL" else [district]
+    """실험 대상 구 목록을 반환한다.
+
+    `ALL`은 25개 구 전체를 의미한다. `A2C_BEST3`, `A2C_WORST3`,
+    `A2C_BEST_WORST`는 최종 A2C 결과에서 뽑은 Best/Worst 구 묶음으로,
+    ablation 실험을 빠르게 반복하기 위한 별칭이다.
+    """
+    key = str(district).upper()
+    if key == "ALL":
+        return DISTRICTS
+    if key == "A2C_BEST3":
+        return A2C_BEST3_DISTRICTS
+    if key == "A2C_WORST3":
+        return A2C_WORST3_DISTRICTS
+    if key in {"A2C_BEST_WORST", "A2C_BESTWORST"}:
+        return A2C_BEST3_DISTRICTS + A2C_WORST3_DISTRICTS
+    if "," in str(district):
+        return [part.strip() for part in str(district).split(",") if part.strip()]
+    return [district]
 
 
 def subprocess_env() -> dict[str, str]:

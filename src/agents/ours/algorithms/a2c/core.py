@@ -521,7 +521,7 @@ def pretrain_behavior_cloning(
 
 
 def evaluate(policy: PolicyNetwork, episodes: list, args: argparse.Namespace, device: torch.device, seed: int) -> tuple[float, list[float]]:
-    """고정 7일 평가셋에서 greedy policy의 평균 reward를 계산한다."""
+    """평가 holdout에서 greedy policy의 평균 reward를 계산한다."""
     rewards = []
     for ep in episodes:
         env = make_env(ep, args, for_eval=True)
@@ -538,7 +538,7 @@ def evaluate(policy: PolicyNetwork, episodes: list, args: argparse.Namespace, de
 
 
 def evaluate_heuristic(episodes: list, seed: int) -> tuple[float, list[float]]:
-    """기존 most_imbalanced 휴리스틱의 7일 평균 reward를 계산한다."""
+    """기존 most_imbalanced 휴리스틱의 holdout 평균 reward를 계산한다."""
     heuristic = get_policy("most_imbalanced")
     rewards = []
     for ep in episodes:
@@ -560,8 +560,8 @@ def print_eval_table(
     model_rewards: list[float],
     eval_dates: list[str],
 ) -> None:
-    """7일 평가 결과를 표로 출력한다."""
-    print(f"\n=== {label} vs 휴리스틱 (7일) ===")
+    """평가 결과를 표로 출력한다."""
+    print(f"\n=== {label} vs 휴리스틱 ({len(eval_dates)}일) ===")
     print(f"{'날짜':12}{'휴리스틱':>10}{'모델':>10}{'Δ(M-휴)':>9}")
     for date, h, r in zip(eval_dates, heuristic_rewards, model_rewards):
         print(f"{date:12}{h:>10.1f}{r:>10.1f}{r - h:>9.1f}")
