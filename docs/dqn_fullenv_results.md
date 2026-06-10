@@ -21,7 +21,7 @@ candidate Top-K(forecast_imbalance, K=12, zone static3)로 **행동 후보만 12
 실행 커맨드(요지):
 
 ```
-python -m src.agents.ours.run_interactive --algorithm dqn --district {구} \
+python -m src.agents.run_interactive --algorithm dqn --district {구} \
   --processed-dir data/processed_seoul_all \
   --forecast-path data/forecast_by_gu/demand_forecast_1h_{구}.parquet \
   --candidate-top-k 12 --candidate-mode forecast_imbalance \
@@ -102,7 +102,7 @@ model-free DQN이 "탐욕 휴리스틱보다 나은 비탐욕 정책"을 학습�
 - **트럭 1대** → 신용할당 단순화
 
 구현: `src/agents/ours/common/dqn_small_core.py` (기존 소스 무수정, 신규 추가).
-실행: `python -m src.agents.ours.run_interactive --algorithm dqn_small ...`
+실행: `python -m src.agents.run_interactive --algorithm dqn_small ...`
 
 ## 6. DQN-small 결과 (추후 추가 예정)
 

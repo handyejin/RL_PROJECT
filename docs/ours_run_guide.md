@@ -65,7 +65,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python scripts/train_demand_forecast.p
 25개 구 전체 학습은 `run_from_config`에서 `--district ALL`을 지정한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/a2c_topk12.yaml \
   --district ALL
 ```
@@ -100,14 +100,14 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python scripts/train_vae_demand_latent
 같은 작업은 interactive wrapper에서도 실행할 수 있다.
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive
 ```
 
 첫 메뉴에서 `VAE latent 파일 생성`을 선택하면 VAE 파일만 먼저 생성한다.
 명령형으로 바로 실행하려면:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive \
   --task vae \
   --district ALL \
   --vae-epochs 30
@@ -122,7 +122,7 @@ data/vae_latent_by_gu/vae_demand_latent_강남구.parquet
 VAE를 붙인 A2C 실험은 다음처럼 실행한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/a2c_topk12_vae.yaml
 ```
 
@@ -134,7 +134,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_con
 터미널 선택형 wrapper를 추가했다.
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive
 ```
 
 실행하면 다음을 고른다.
@@ -156,7 +156,7 @@ PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
 명령형으로 바로 실행할 수도 있다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive \
   --algorithm a2c \
   --district 영등포구 \
   --episodes 500 \
@@ -183,7 +183,7 @@ Top-K처럼 실험마다 바꾸는 값은 YAML 파일로 관리할 수 있다.
 예를 들어 DQN Top-K 3 실험은 다음처럼 실행한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml
 ```
 
@@ -200,7 +200,7 @@ candidate_action:
 CLI에서 임시로 override할 수도 있다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml \
   --district 영등포구 \
   --candidate-top-k 4
@@ -209,7 +209,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_con
 25개 구 전체를 같은 설정으로 돌리고 싶으면 `district: ALL`로 바꾸거나 CLI에서 지정한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml \
   --district ALL
 ```
@@ -217,7 +217,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_con
 `--dry-run`을 붙이면 실제 학습은 하지 않고 실행될 명령만 확인한다.
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml \
   --dry-run
 ```
@@ -225,7 +225,7 @@ PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
 Contextual Bandit은 다음처럼 실행한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/bandit_topk12.yaml \
   --district 강남구
 ```
@@ -246,7 +246,7 @@ Top-K는 다음 의미를 가진다.
 REINFORCE는 다음처럼 실행한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive \
   --algorithm reinforce \
   --district 영등포구 \
   --episodes 500 \
@@ -267,7 +267,7 @@ DQN은 timestep 기준으로 실행한다. wrapper에서는 다른 알고리즘�
 rollback과 early stopping은 사용하지 않는다. 학습은 끝까지 진행하고, 대표 성능은 저장된 Best checkpoint로 평가한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive \
   --algorithm dqn \
   --district 영등포구 \
   --total-timesteps 170000 \
@@ -278,7 +278,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interact
 PPO도 timestep 기준으로 실행한다. 기본 설정은 Top-K action 후보에서 정책이 너무 크게 흔들리지 않도록 보수적인 update 값을 사용한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive \
   --algorithm ppo \
   --district 영등포구 \
   --total-timesteps 170000 \
@@ -300,7 +300,7 @@ PPO 기본 하이퍼파라미터는 다음과 같다.
 25개 구 전체를 순차 실행하려면:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive \
   --algorithm a2c \
   --district ALL \
   --episodes 500 \
@@ -410,7 +410,7 @@ docs/gu_a2c_topk_no_bc_2026-06-06_summary.md
 PR 전 간단히 실행만 확인하려면 episode를 작게 줄인다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive \
   --algorithm a2c \
   --district 영등포구 \
   --episodes 2 \

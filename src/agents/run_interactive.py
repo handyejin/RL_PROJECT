@@ -23,10 +23,10 @@ state/action/reward 정의·data 경로·wrapper 구성은 동일하다.
     - capacity_path:   data/processed/station_capacity.csv
 
 실행 예:
-    PYTHONPATH=. python -m src.agents.ours.run_interactive
-    PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm a2c --district 영등포구
-    PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm ppo_v4 --district ALL
-    PYTHONPATH=. python -m src.agents.ours.run_interactive --algorithm qrdqn --district 강남구 --timesteps 50000
+    PYTHONPATH=. python -m src.agents.run_interactive
+    PYTHONPATH=. python -m src.agents.run_interactive --algorithm a2c --district 영등포구
+    PYTHONPATH=. python -m src.agents.run_interactive --algorithm ppo_v4 --district ALL
+    PYTHONPATH=. python -m src.agents.run_interactive --algorithm qrdqn --district 강남구 --timesteps 50000
 """
 
 from __future__ import annotations

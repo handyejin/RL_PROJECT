@@ -157,7 +157,7 @@
 ---
 
 ## 부록. 재현
-- 학습: `python -m src.agents.ours.run_interactive --algorithm dqn_small --district ALL --processed-dir data/processed_seoul_all`
+- 학습: `python -m src.agents.run_interactive --algorithm dqn_small --district ALL --processed-dir data/processed_seoul_all`
   (400k는 `--total-timesteps 400000`)
 - 73일 평가: `python scripts/posthoc_eval_holdout.py --model-tag-prefix small400 --stations-log-dir logs/runs/small400 --demand-noise none`
 - Poisson: `--demand-noise poisson --eval-samples N` · VAE: `--vae-mode demand_latent --vae-latent-path ...`

@@ -34,7 +34,7 @@ Reward:
     학습에서는 선택적으로 reward scale만 줄여 DQN TD target의 크기를 안정화한다.
 
 실행 예:
-    PYTHONPATH=. python -m src.agents.ours.run_from_config \
+    PYTHONPATH=. python -m src.agents.run_from_config \
         --config config/ours/dqn_topk12.yaml
 """
 

@@ -14,7 +14,7 @@ YAML에서 관리하는 핵심 값:
     값이 누락되었을 때 실행이 바로 깨지지 않게 하는 fallback일 뿐이다.
 
 예:
-    PYTHONPATH=. python -m src.agents.ours.run_from_config \
+    PYTHONPATH=. python -m src.agents.run_from_config \
       --config config/ours/dqn_topk3.yaml
 """
 

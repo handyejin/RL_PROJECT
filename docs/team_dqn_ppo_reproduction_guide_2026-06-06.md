@@ -49,8 +49,8 @@ DQN은 action 후보가 많을수록 Q값 학습이 불안정해질 수 있으�
 
 | 파일 | 역할 |
 |---|---|
-| `src/agents/ours/run_from_config.py` | YAML 설정을 읽어 학습 실행 |
-| `src/agents/ours/run_interactive.py` | 터미널 선택형 실행기 |
+| `src/agents/run_from_config.py` | YAML 설정을 읽어 학습 실행 |
+| `src/agents/run_interactive.py` | 터미널 선택형 실행기 |
 | `src/agents/ours/algorithms/dqn/core.py` | DQN 학습/evaluation core |
 | `src/agents/ours/algorithms/ppo/core.py` | PPO 학습/evaluation core |
 | `src/agents/ours/common/candidate_actions.py` | Top-K 후보 action wrapper |
@@ -63,7 +63,7 @@ DQN은 action 후보가 많을수록 Q값 학습이 불안정해질 수 있으�
 먼저 dry-run으로 명령이 정상 생성되는지 확인한다.
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml \
   --dry-run
 ```
@@ -71,14 +71,14 @@ PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
 DQN Top-K 3 실행:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml
 ```
 
 다른 구 실행:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml \
   --district 영등포구
 ```
@@ -86,7 +86,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_con
 Top-K만 바꿔서 실행:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml \
   --candidate-top-k 4
 ```
@@ -94,7 +94,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_con
 25개 구 전체 실행:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml \
   --district ALL
 ```
@@ -102,7 +102,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_con
 PPO 실행:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/ppo_topk12.yaml
 ```
 

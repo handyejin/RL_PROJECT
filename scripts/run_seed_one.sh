@@ -10,7 +10,7 @@ LOG="$OUTDIR/k${TOPK}_seed${SEED}_${GU}.log"
 SUMMARY="$OUTDIR/summary_k${TOPK}_seed${SEED}.log"
 
 echo "==== [k=${TOPK} seed=${SEED}] ${GU} 시작 $(date +%H:%M:%S) ====" >> "$SUMMARY"
-PYTHONUNBUFFERED=1 PYTHONPATH=. python -m src.agents.ours.run_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. python -m src.agents.run_interactive \
   --algorithm dqn_small \
   --district "$GU" \
   --split-mode chronological \

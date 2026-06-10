@@ -26,14 +26,14 @@ YAML 실행기로 대체했다. 실험 설정은 코드 파일을 새로 만들�
 ## 권장 실행 방식
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml
 ```
 
 다른 구나 Top-K 값은 CLI에서 바로 바꿀 수 있다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_from_config \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_from_config \
   --config config/ours/dqn_topk3.yaml \
   --district 영등포구 \
   --candidate-top-k 4

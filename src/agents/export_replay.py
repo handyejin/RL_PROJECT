@@ -6,7 +6,7 @@ forecast state와 Top-K action wrapper를 그대로 적용한 별도 exporter다
 생성된 JSON은 ``docs/ours_replay_viewer.html``에서 열 수 있다.
 
 실행 예:
-    PYTHONPATH=. python -m src.agents.ours.export_replay \
+    PYTHONPATH=. python -m src.agents.export_replay \
         --algorithm reinforce --district 강남구 --date 2025-03-25 \
         --checkpoint logs/reinforce_interactive_reinforce_강남구/reinforce_final.pt
 """

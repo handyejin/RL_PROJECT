@@ -19,7 +19,7 @@ FAILED=()
 for GU in "${GUS[@]}"; do
   LOG="$OUTDIR/seed${SEED}_${GU}.log"
   echo "==== [seed=${SEED}] ${GU} 시작 $(date +%H:%M:%S) ====" | tee -a "$SUMMARY"
-  PYTHONUNBUFFERED=1 PYTHONPATH=. python -m src.agents.ours.run_interactive \
+  PYTHONUNBUFFERED=1 PYTHONPATH=. python -m src.agents.run_interactive \
     --algorithm dqn_small \
     --district "$GU" \
     --split-mode chronological \

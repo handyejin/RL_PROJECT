@@ -422,7 +422,7 @@ DQN이 "환경을 1트럭·top15로 줄여야"(dqn_small) 겨우 강남 1곳을 
 
 | 실험 | 명령 / 로그 |
 |---|---|
-| 25구 학습 | `python -m src.agents.ours.run_interactive --algorithm dqn_small --district ALL --processed-dir data/processed_seoul_all` |
+| 25구 학습 | `python -m src.agents.run_interactive --algorithm dqn_small --district ALL --processed-dir data/processed_seoul_all` |
 | 73일 평가 | `python scripts/posthoc_eval_holdout.py --model-tag-prefix small400 --stations-log-dir logs/runs/small400 --demand-noise none` |
 | 시드 민감도 | `scripts/run_seed_one.sh` → `logs/runs/seedgrid/` |
 | BC 워밍업 | `scripts/run_bc_test.sh`, `run_bc_test2.sh` |
