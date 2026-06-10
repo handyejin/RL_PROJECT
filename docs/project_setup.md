@@ -74,7 +74,7 @@ reward = stockout × (-1.0) + full × (-0.8) + travel_km × (-0.008) + travel_st
 
 | 항목 | 값 |
 |---|---|
-| 알고리즘 | **MaskableDQN** (SB3 DQN + action masking, [src/agents/masked_dqn.py](../src/agents/masked_dqn.py)) |
+| 알고리즘 | **MaskableDQN** (SB3 DQN + action masking, [src/agents/models/masked_dqn.py](../src/agents/models/masked_dqn.py)) |
 | Double Q | **ON** (over-estimation 완화) |
 | Policy net | MLP **[256, 256]** |
 | 비교 baseline | `MostImbalancedPolicy` 휴리스틱 (잉여 큰 곳 → 부족 큰 곳 greedy) |

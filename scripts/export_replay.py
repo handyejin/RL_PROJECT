@@ -106,7 +106,7 @@ def main() -> None:
 
     print(f"\n[2/3] loading model: {args.model} (algo={args.algo})")
     if args.algo == "masked_dqn":
-        from src.agents.masked_dqn import MaskableDQN
+        from src.agents.models.masked_dqn import MaskableDQN
         model = MaskableDQN.load(args.model, env=env)
     else:
         model = DQN.load(args.model, env=env)

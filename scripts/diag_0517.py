@@ -11,8 +11,8 @@ import numpy as np
 
 from src.envs.data_loader import load_episode
 from src.envs.rebalance_env import RebalanceEnv
-from src.agents.baselines import get_policy
-from src.agents.masked_dqn import MaskableDQN
+from src.agents.common.baselines import get_policy
+from src.agents.models.masked_dqn import MaskableDQN
 
 # fair eval 환경 설정 (config/default.yaml + 평가 시 shaping OFF)
 ENV_KW = dict(

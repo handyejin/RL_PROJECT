@@ -121,34 +121,6 @@ def subprocess_env() -> dict[str, str]:
     return env
 
 
-def build_vae_command(args: Any, district: str) -> list[str]:
-    """선택한 구에 대한 VAE latent 생성 명령을 만든다."""
-    return [
-        sys.executable,
-        "scripts/train_vae_demand_latent.py",
-        "--district",
-        district,
-        "--processed-dir",
-        str(project_path(args.processed_dir)),
-        "--out-dir",
-        str(project_path(args.vae_latent_dir)),
-        "--latent-dim",
-        str(args.vae_latent_dim),
-        "--epochs",
-        str(args.vae_epochs),
-        "--hidden",
-        str(args.vae_hidden),
-        "--batch-size",
-        str(args.vae_batch_size),
-        "--lr",
-        str(args.vae_lr),
-        "--beta",
-        str(args.vae_beta),
-        "--device",
-        "mps" if args.device == "mps" else "cpu",
-    ] + (["--progress"] if args.progress else ["--no-progress"])
-
-
 def build_training_command(args: Any, district: str) -> list[str]:
     """선택한 알고리즘/구에 맞는 core 실행 명령을 만든다."""
     module = ALGORITHM_MODULES[args.algorithm]
@@ -258,19 +230,6 @@ def build_training_command(args: Any, district: str) -> list[str]:
     if args.progress:
         cmd.append("--progress")
     return cmd
-
-
-def ensure_vae_inputs(args: Any) -> bool:
-    """VAE latent 생성에 필요한 전처리 파일이 있는지 확인한다."""
-    processed_dir = project_path(args.processed_dir)
-    missing = [str(processed_dir / name) for name in ["stations.parquet", "demand_10min.parquet"] if not (processed_dir / name).exists()]
-    if missing:
-        print("\nVAE latent 생성에 필요한 파일이 없습니다.")
-        for path in missing:
-            print(f"  - {path}")
-        print("먼저 서울 전체 전처리를 실행하세요.")
-        return False
-    return True
 
 
 def ensure_training_inputs(args: Any, district: str) -> bool:

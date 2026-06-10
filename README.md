@@ -340,7 +340,7 @@ Parameter sharing single-agent wrapper — **1 RL step = 1 트럭의 1 결정**.
 - `done`은 `t >= T` (24h = 144 step)
 - `action_masks()` (alias `get_action_mask`): in-flight 트럭 목적지 차단, `strict_urgent_mask=True`면 위급 정류소만 허용(자기 위치 stay 항상 허용), 전부 막히면 자기 위치 fallback. `use_action_mask=False`면 all-ones
 
-### 5.5 베이스라인 (`src/agents/baselines.py`)
+### 5.5 베이스라인 (`src/agents/common/baselines.py`)
 
 - `NoopPolicy` — 자기 위치 반환 (재배치 없음, RL의 상한선)
 - `MostImbalancedPolicy` — load==0 → 잉여 큰 곳, load==full → 부족 큰 곳, 부분 → |bikes-target| 큰 곳.
@@ -410,7 +410,7 @@ tensorboard --logdir logs
 ### 7.1 Action mask 실제 구현 (`RebalanceEnv.action_masks`)
 이전엔 placeholder였던 마스크를 실제 구현. 다른 트럭이 향하는 destination을 차단해 중복 작업 회피. `MaskableDQN`이 학습·평가 모두에서 이를 활용.
 
-### 7.2 MaskableDQN + Double DQN (`src/agents/masked_dqn.py`)
+### 7.2 MaskableDQN + Double DQN (`src/agents/models/masked_dqn.py`)
 SB3 DQN을 상속해 ε-greedy 탐색·argmax·predict에서 invalid action을 -∞로 처리. `--double-q`로 Double DQN 타깃 활성화(Q 과대추정 완화).
 
 ### 7.3 SMDP 트리거 (`urgent_low_ratio` / `urgent_high_ratio`)

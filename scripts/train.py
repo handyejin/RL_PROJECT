@@ -27,14 +27,14 @@ from stable_baselines3 import DQN  # noqa: E402
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback  # noqa: E402
 from stable_baselines3.common.monitor import Monitor  # noqa: E402
 
-from src.agents.baselines import get_policy  # noqa: E402
-from src.agents.masked_dqn import MaskableDQN  # noqa: E402
-from src.agents.qrdqn import MaskableQRDQN  # noqa: E402
-from src.agents.ppo import MaskablePPO  # noqa: E402
-from src.agents.ppo_v2 import GradientInformedPPO  # noqa: E402
-from src.agents.ppo_v3 import RewardPrioritizedPPO  # noqa: E402
-from src.agents.ppo_v4 import KLtoBC_PPO  # noqa: E402
-from src.agents.sac import MaskableSAC  # noqa: E402
+from src.agents.common.baselines import get_policy  # noqa: E402
+from src.agents.models.masked_dqn import MaskableDQN  # noqa: E402
+from src.agents.models.qrdqn import MaskableQRDQN  # noqa: E402
+from src.agents.models.ppo import MaskablePPO  # noqa: E402
+from src.agents.models.ppo_v2 import GradientInformedPPO  # noqa: E402
+from src.agents.models.ppo_v3 import RewardPrioritizedPPO  # noqa: E402
+from src.agents.models.ppo_v4 import KLtoBC_PPO  # noqa: E402
+from src.agents.models.sac import MaskableSAC  # noqa: E402
 from src.envs.data_loader import load_episode  # noqa: E402
 from src.envs.rebalance_env import RebalanceEnv  # noqa: E402
 

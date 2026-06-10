@@ -38,14 +38,14 @@ import torch.nn.functional as F
 from stable_baselines3.common.vec_env import DummyVecEnv
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.agents.baselines import get_policy
+from src.agents.common.baselines import get_policy
 from src.agents.common.bc_utils import collect_bc_data
 from src.agents.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.common.date_split import compute_split
 from src.agents.common.data_overrides import apply_capacity_override, attach_forecast_override
 from src.agents.common.future_demand import maybe_wrap_future_demand
 from src.agents.common.reward_shaping import maybe_wrap_agent_reward_shaping
-from src.agents.masked_dqn import MaskableDQN
+from src.agents.models.masked_dqn import MaskableDQN
 from src.agents.common.stochastic_env import StochasticRebalanceEnv
 from src.agents.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
 from src.envs.data_loader import EpisodeData, load_episode

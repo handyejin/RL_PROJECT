@@ -26,8 +26,8 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.agents.baselines import get_policy  # noqa: E402
-from src.agents.masked_dqn import MaskableDQN  # noqa: E402
+from src.agents.common.baselines import get_policy  # noqa: E402
+from src.agents.models.masked_dqn import MaskableDQN  # noqa: E402
 from src.agents.common.data_overrides import (  # noqa: E402
     apply_capacity_override,
     attach_forecast_override,

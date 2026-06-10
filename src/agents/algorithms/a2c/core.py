@@ -49,7 +49,7 @@ from torch.distributions import Categorical
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 
-from src.agents.baselines import get_policy
+from src.agents.common.baselines import get_policy
 from src.agents.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.common.data_overrides import apply_capacity_override, attach_forecast_override
 from src.agents.common.date_split import compute_split
@@ -57,19 +57,6 @@ from src.agents.common.future_demand import build_history_net_profile, maybe_wra
 from src.agents.common.reward_shaping import maybe_wrap_agent_reward_shaping
 from src.envs.data_loader import load_episode
 from src.envs.rebalance_env import RebalanceEnv
-
-
-def date_range(start: str, end: str) -> list[str]:
-    """시작일부터 종료일까지 날짜 문자열 목록을 만든다."""
-    import datetime
-
-    d = datetime.date.fromisoformat(start)
-    end_d = datetime.date.fromisoformat(end)
-    dates = []
-    while d <= end_d:
-        dates.append(d.isoformat())
-        d += datetime.timedelta(days=1)
-    return dates
 
 
 # TRAIN_DATES / EVAL_DATES 는 main() 에서 --split-mode 에 따라 compute_split 으로 생성한다.

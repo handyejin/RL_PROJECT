@@ -19,8 +19,7 @@ import torch as th
 from gymnasium import spaces
 from stable_baselines3.common.type_aliases import Schedule
 from stable_baselines3.common.utils import explained_variance
-from stable_baselines3.common.save_util import load_from_zip_file
-from src.agents.ppo import MaskablePPO
+from src.agents.models.ppo import MaskablePPO
 
 
 class KLtoBC_PPO(MaskablePPO):

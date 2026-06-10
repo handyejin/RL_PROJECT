@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import datetime
 import random
-from typing import Callable
 
 import numpy as np
 
-from src.agents.baselines import get_policy
+from src.agents.common.baselines import get_policy
 from src.agents.common.episode_cache import load_episodes_cached
 from src.envs.data_loader import load_episode
 from src.envs.rebalance_env import RebalanceEnv
@@ -99,34 +98,3 @@ def print_eval_table(label: str, heuristic_rewards: list[float], model_rewards: 
         f"{'평균':12}{np.mean(heuristic_rewards):>10.1f}{np.mean(model_rewards):>10.1f}"
         f"{np.mean(model_rewards) - np.mean(heuristic_rewards):>9.1f}"
     )
-
-
-def load_train_eval_episodes(
-    args,
-    train_dates: list[str],
-    eval_dates: list[str] | None = None,
-    progress_prefix: str | None = None,
-) -> tuple[list, list]:
-    """학습/평가 episode를 같은 캐시 정책으로 로딩한다."""
-    cache_dir = None if getattr(args, "no_episode_cache", False) else getattr(args, "episode_cache_dir", None)
-    eval_dates = eval_dates or EVAL_DATES
-    train_label = f"{progress_prefix} load train" if progress_prefix else None
-    eval_label = f"{progress_prefix} load eval" if progress_prefix else None
-    train_episodes = load_rebalance_episodes(
-        train_dates,
-        args.district,
-        args.processed_dir,
-        cache_dir=cache_dir,
-        progress_label=train_label,
-    )
-    eval_episodes = load_rebalance_episodes(
-        eval_dates,
-        args.district,
-        args.processed_dir,
-        cache_dir=cache_dir,
-        progress_label=eval_label,
-    )
-    return train_episodes, eval_episodes
-
-
-EnvFactory = Callable[[list, object, int | None, bool], object]

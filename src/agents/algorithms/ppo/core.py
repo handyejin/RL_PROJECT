@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import random
 from pathlib import Path
 
 import numpy as np
@@ -31,31 +30,18 @@ from sb3_contrib import MaskablePPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from torch.utils.data import DataLoader, TensorDataset
 
-from src.agents.baselines import get_policy
+from src.agents.common.baselines import get_policy
 from src.agents.common.bc_utils import collect_bc_data
 from src.agents.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.common.data_overrides import apply_capacity_override, attach_forecast_override
 from src.agents.common.date_split import compute_split
 from src.agents.common.future_demand import maybe_wrap_future_demand
 from src.agents.common.reward_shaping import maybe_wrap_agent_reward_shaping
-# KLtoBC_PPO 는 별도로 src.agents.ppo.MaskablePPO (vanilla SB3 PPO + predict-time mask) 를
+# KLtoBC_PPO 는 별도로 src.agents.models.ppo.MaskablePPO (vanilla SB3 PPO + predict-time mask) 를
 # 상속한다 — ppo_v4 경로에서만 사용.
-from src.agents.ppo_v4 import KLtoBC_PPO
+from src.agents.models.ppo_v4 import KLtoBC_PPO
 from src.envs.data_loader import load_episode
 from src.envs.rebalance_env import RebalanceEnv
-
-
-def date_range(start: str, end: str) -> list[str]:
-    """시작일부터 종료일까지 날짜 문자열 목록을 만든다."""
-    import datetime
-
-    d = datetime.date.fromisoformat(start)
-    end_d = datetime.date.fromisoformat(end)
-    dates = []
-    while d <= end_d:
-        dates.append(d.isoformat())
-        d += datetime.timedelta(days=1)
-    return dates
 
 
 # TRAIN_DATES / EVAL_DATES 는 main() 에서 --split-mode 에 따라 compute_split 으로 생성한다.
@@ -307,7 +293,7 @@ def main() -> None:
     print(f"heuristic mean reward: {heuristic_mean:.2f}")
 
     if args.algo == "ppo_v4":
-        # KLtoBC_PPO 는 src.agents.ppo.MaskablePPO (vanilla PPO + predict-time masking) 를
+        # KLtoBC_PPO 는 src.agents.models.ppo.MaskablePPO (vanilla PPO + predict-time masking) 를
         # 상속한다. sb3_contrib MaskablePPO 와 net_arch 포맷(dict vs list)이 다르므로
         # 여기서는 list 포맷을 사용한다.
         model = KLtoBC_PPO(

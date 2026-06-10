@@ -11,9 +11,8 @@ import numpy as np
 import torch as th
 from torch import nn
 from gymnasium import spaces
-from stable_baselines3.common.type_aliases import Schedule
 from stable_baselines3.dqn.policies import DQNPolicy, QNetwork
-from src.agents.masked_dqn import MaskableDQN
+from src.agents.models.masked_dqn import MaskableDQN
 
 
 class QuantileNetwork(QNetwork):

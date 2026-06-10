@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import numpy as np
 import torch as th
-from gymnasium import spaces
 from stable_baselines3 import DQN
 from stable_baselines3.common.noise import ActionNoise
 from torch.nn import functional as F

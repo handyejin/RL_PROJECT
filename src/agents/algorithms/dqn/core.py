@@ -68,7 +68,7 @@ from src.agents.common.experiment_utils import (
 )
 from src.agents.common.future_demand import maybe_wrap_future_demand
 from src.agents.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
-from src.agents.masked_dqn import MaskableDQN
+from src.agents.models.masked_dqn import MaskableDQN
 from src.envs.rebalance_env import RebalanceEnv
 
 
