@@ -17,7 +17,7 @@ ours 알고리즘 core들이 동일한 분할 변수
 두 mode 모두 다음 변수는 동일하게 유지한다:
     seed = 42
     train_ratio = 0.8 → train 292일, eval pool 73일
-    EVAL_DATES = sorted(eval_pool)  → 실제 평가에 쓰이는 holdout 전체 기간
+    EVAL_DATES = sorted(eval_pool)  → eval pool 전체(73일)를 실제 평가 holdout으로 사용
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def compute_split(
     """선택된 mode 로 (TRAIN_DATES, EVAL_DATES) 를 만든다.
 
     EVAL_DATES 는 두 mode 모두 eval pool 을 정렬해 사용한다. n_eval 이 None
-    이면 eval pool 전체(chronological 기준 2025-10-20~2025-12-31)를
+    이면 eval pool 전체(73일; chronological 기준 2025-10-20~2025-12-31)를
     평가에 쓰고, 정수면 상위 n_eval 일만 평가에 쓴다.
     """
     dates = date_range(start, end)

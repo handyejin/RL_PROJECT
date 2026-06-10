@@ -34,7 +34,7 @@ ALL_DATES = date_range("2025-01-01", "2025-12-31")
 RNG.shuffle(ALL_DATES)
 N_TRAIN = int(len(ALL_DATES) * 0.8)
 TRAIN_DATES = ALL_DATES[:N_TRAIN]
-EVAL_DATES = sorted(ALL_DATES[N_TRAIN:])
+EVAL_DATES = sorted(ALL_DATES[N_TRAIN:])  # eval pool 전체(73일)
 
 
 # 모든 ours agent가 같은 평가 reward를 쓰도록 환경 기본값을 한 곳에 둔다.
