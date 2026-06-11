@@ -515,3 +515,38 @@ open docs/training_flow.html         # 5 정류소 미니 시뮬레이터
 open docs/replay_viewer.html         # 학습 결과 episode 재생
 tensorboard --logdir logs            # 학습 곡선
 ```
+
+---
+
+## 10. Replay Viewer 실행 방법
+
+학습된 정책이 episode 안에서 어떤 정류소를 선택하고 트럭이 어떻게 이동하는지 확인하는 웹 viewer다.
+최신 발표/시연용 replay JSON은 `docs/` 폴더에 함께 들어 있다.
+
+### 실행
+
+프로젝트 루트에서 아래 명령을 실행한다.
+
+```bash
+cd docs
+../.venv/bin/python -m http.server 8766
+```
+
+브라우저에서 아래 주소를 연다.
+
+```text
+http://localhost:8766/ours_replay_viewer.html
+```
+
+### 포함된 replay JSON
+
+현재 viewer에는 73일 holdout 기준으로 녹화용 대표 episode만 포함한다.
+
+| 알고리즘 | 좋은 사례 | 나쁜 사례 |
+|---|---|---|
+| REINFORCE | `송파구_REINFORCE_2025-10-20.json` | `마포구_REINFORCE_2025-10-20.json` |
+| A2C | `노원구_A2C_2025-10-20.json` | `관악구_A2C_2025-10-20.json` |
+| PPO | `동대문구_PPO_2025-10-20.json` | `송파구_PPO_2025-10-20.json` |
+
+파란 선은 학습 모델의 누적 reward, 회색 선은 `MostImbalanced` baseline의 누적 reward다.
+Delta가 양수이면 모델이 baseline보다 좋은 것이며, 오른쪽 표정 게이지는 현재 step 기준 성능 차이를 직관적으로 보여준다.
