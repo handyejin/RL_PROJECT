@@ -1,4 +1,4 @@
-"""우리 REINFORCE/A2C 모델의 episode replay JSON을 생성한다.
+"""우리 REINFORCE/A2C/PPO 모델의 episode replay JSON을 생성한다.
 
 이 파일은 팀원용 DQN replay exporter를 수정하지 않고, 우리가 추가한
 forecast state와 Top-K action wrapper를 그대로 적용한 별도 exporter다.
@@ -28,10 +28,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agents.ours.algorithms.a2c import core as a2c_core  # noqa: E402
+from src.agents.ours.algorithms.ppo import core as ppo_core  # noqa: E402
 from src.agents.ours.algorithms.reinforce import core as reinforce_core  # noqa: E402
 from src.agents.ours.common.candidate_actions import CandidateTopKActionWrapper  # noqa: E402
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override  # noqa: E402
+from src.agents.ours.common.experiment_utils import ENV_KW  # noqa: E402
+from src.agents.baselines import get_policy  # noqa: E402
 from src.envs.data_loader import load_episode  # noqa: E402
+from src.envs.rebalance_env import RebalanceEnv  # noqa: E402
 
 
 def _project_path(value: str | Path) -> Path:
@@ -69,6 +73,8 @@ def _make_env(ep, args: argparse.Namespace):
     env_args = _build_env_args(args)
     if args.algorithm == "a2c":
         return a2c_core.make_env(ep, env_args, seed=args.seed, for_eval=True)
+    if args.algorithm == "ppo":
+        return ppo_core.make_env(ep, env_args, seed=args.seed, for_eval=True)
     return reinforce_core.make_env(ep, env_args, seed=args.seed, for_eval=True)
 
 
@@ -131,6 +137,32 @@ def _policy_distribution(policy, obs: np.ndarray, mask: np.ndarray, device: torc
     return action_rank, probs.astype(float), logits_np.astype(float)
 
 
+def _ppo_distribution(model, obs: np.ndarray, mask: np.ndarray) -> tuple[int, np.ndarray, np.ndarray]:
+    """MaskablePPO policy에서 action mask가 반영된 rank별 확률을 계산한다."""
+    with torch.no_grad():
+        obs_t, _ = model.policy.obs_to_tensor(obs)
+        mask_np = np.asarray(mask, dtype=bool).reshape(1, -1)
+        dist = model.policy.get_distribution(obs_t, action_masks=mask_np)
+        probs = dist.distribution.probs.detach().cpu().numpy().reshape(-1)
+    logits = np.log(np.clip(probs, 1e-12, 1.0))
+    action_rank = int(np.argmax(probs))
+    return action_rank, probs.astype(float), logits.astype(float)
+
+
+def _action_distribution(
+    *,
+    algorithm: str,
+    model,
+    obs: np.ndarray,
+    mask: np.ndarray,
+    device: torch.device,
+) -> tuple[int, np.ndarray, np.ndarray]:
+    """알고리즘별 policy 출력 형식을 replay용 확률 배열로 통일한다."""
+    if algorithm == "ppo":
+        return _ppo_distribution(model, obs, mask)
+    return _policy_distribution(model, obs, mask, device)
+
+
 def _station_policy_values(n_stations: int, candidate_stations: np.ndarray, probs: np.ndarray) -> list[float | None]:
     """rank별 확률을 station index 기준 배열로 펼친다."""
     values: list[float | None] = [None] * n_stations
@@ -159,6 +191,36 @@ def _candidate_rows(ep, candidate_stations: np.ndarray, probs: np.ndarray, logit
     return rows
 
 
+def _baseline_curve(ep, seed: int) -> dict:
+    """같은 episode에서 MostImbalanced baseline의 누적 reward 곡선을 만든다."""
+    heuristic = get_policy("most_imbalanced")
+    env = RebalanceEnv(ep, seed=seed, **ENV_KW)
+    env.reset(seed=seed)
+    done = False
+    total = 0.0
+    curve = [0.0]
+    stockout = [0]
+    full = [0]
+    km = [0.0]
+    while not done:
+        _, reward, terminated, truncated, _ = env.step(heuristic.act(env))
+        total += float(reward)
+        curve.append(float(total))
+        stockout.append(int(env.cum_stockout))
+        full.append(int(env.cum_full))
+        km.append(float(env.cum_travel_km))
+        done = bool(terminated or truncated)
+    return {
+        "name": "MostImbalanced",
+        "cum_reward": curve,
+        "cum_stockout": stockout,
+        "cum_full": full,
+        "cum_km": km,
+        "total_reward": float(total),
+        "steps": len(curve) - 1,
+    }
+
+
 def _snapshot(
     *,
     env,
@@ -173,10 +235,17 @@ def _snapshot(
     action_rank: int | None,
     station_action: int | None,
     actor_truck: int | None,
+    algorithm: str,
 ) -> dict:
     """현재 env 상태를 하나의 replay frame으로 저장한다."""
     mask = env.action_masks()
-    greedy_rank, probs, logits = _policy_distribution(policy, obs, mask, device)
+    greedy_rank, probs, logits = _action_distribution(
+        algorithm=algorithm,
+        model=policy,
+        obs=obs,
+        mask=mask,
+        device=device,
+    )
     candidate_stations = _candidate_station_ids(env, mask)
     if action_rank is None:
         action_rank = greedy_rank
@@ -213,8 +282,8 @@ def _snapshot(
 
 def parse_args() -> argparse.Namespace:
     """CLI 옵션을 정의한다."""
-    parser = argparse.ArgumentParser(description="Export ours REINFORCE/A2C replay JSON")
-    parser.add_argument("--algorithm", choices=["reinforce", "a2c"], default="reinforce")
+    parser = argparse.ArgumentParser(description="Export ours REINFORCE/A2C/PPO replay JSON")
+    parser.add_argument("--algorithm", choices=["reinforce", "a2c", "ppo"], default="reinforce")
     parser.add_argument("--district", default="강남구")
     parser.add_argument("--date", default="2025-03-25")
     parser.add_argument("--processed-dir", default="data/processed_seoul_all")
@@ -267,9 +336,13 @@ def main() -> None:
     obs, _ = env.reset(seed=args.seed)
     obs_dim = int(env.observation_space.shape[0])
     action_dim = int(env.action_space.n)
+    baseline = _baseline_curve(ep, args.seed)
 
     print(f"[3/4] loading policy: {args.checkpoint}", flush=True)
-    policy = _load_policy(args, obs_dim, action_dim, device)
+    if args.algorithm == "ppo":
+        policy = ppo_core.MaskablePPO.load(str(_project_path(args.checkpoint)), env=None, device=device)
+    else:
+        policy = _load_policy(args, obs_dim, action_dim, device)
 
     snapshots: list[dict] = []
     total_steps_track = [0] * env.n_trucks
@@ -291,13 +364,20 @@ def main() -> None:
             action_rank=None,
             station_action=None,
             actor_truck=None,
+            algorithm=args.algorithm,
         )
     )
 
     print("[4/4] rolling episode", flush=True)
     while not done:
         mask = env.action_masks()
-        action_rank, _, _ = _policy_distribution(policy, obs, mask, device)
+        action_rank, _, _ = _action_distribution(
+            algorithm=args.algorithm,
+            model=policy,
+            obs=obs,
+            mask=mask,
+            device=device,
+        )
         candidate_stations = _candidate_station_ids(env, mask)
         station_action = int(candidate_stations[action_rank])
         actor_truck = int(env.current_truck)
@@ -326,6 +406,7 @@ def main() -> None:
                 action_rank=action_rank,
                 station_action=station_action,
                 actor_truck=actor_truck,
+                algorithm=args.algorithm,
             )
         )
 
@@ -360,7 +441,10 @@ def main() -> None:
             "truck_capacity": int(env.truck_capacity),
             "station_capacities": ep.capacity.astype(int).tolist(),
             "policy_values_label": "policy probability over Top-K candidates",
+            "baseline_name": baseline["name"],
+            "baseline_total_reward": baseline["total_reward"],
         },
+        "baseline": baseline,
         "snapshots": snapshots,
     }
 

@@ -1,4 +1,4 @@
-# REINFORCE 보고서 기준 설정: Reward-to-Go + Value baseline, BC 없음
+# REINFORCE 보고서 기준 설정: Reward-to-Go + Value baseline
 
 algorithm: reinforce
 district: 강남구
@@ -12,7 +12,7 @@ training:
   episodes: 500
   eval_every: 50
   n_train_dates: 200
-  bc_epochs: 0
+  split_mode: chronological
   tag: yaml_reinforce_topk12
   device: cpu
   progress: true

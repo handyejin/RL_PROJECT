@@ -15,7 +15,7 @@ training:
   total_timesteps: 170000
   eval_every_timesteps: 20000
   n_train_dates: 200
-  bc_epochs: 0
+  split_mode: chronological
   tag: yaml_dqn_topk3
   device: cpu
   progress: true

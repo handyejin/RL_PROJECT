@@ -1,4 +1,4 @@
-"""A2C/REINFORCE Best-Worst 구 seed 반복 실험을 실행하고 요약한다.
+"""A2C/REINFORCE/PPO Best-Worst 구 seed 반복 실험을 실행하고 요약한다.
 
 목적:
     과제 요구사항의 "random seed 변경 및 신뢰구간" 항목을 보강하기 위해
@@ -8,6 +8,7 @@
 실험 범위:
     - A2C: Best 3구 + Worst 3구
     - REINFORCE: Best 3구 + Worst 3구
+    - PPO: 필요 시 같은 방식으로 추가 검산
     - base seed: 42
     - additional seed: 123, 777
 
@@ -29,6 +30,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from src.agents.ours.common.runner_config import DEFAULT_RUNNER_VALUES
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BASE_SEED = 42
@@ -45,6 +48,12 @@ EXPERIMENTS = {
         "log_prefix": "reinforce",
         "best": ["양천구", "강남구", "광진구"],
         "worst": ["강서구", "마포구", "강동구"],
+    },
+    "ppo": {
+        "module": "src.agents.ours.algorithms.ppo.core",
+        "log_prefix": "ppo",
+        "best": ["강남구", "강동구", "동대문구"],
+        "worst": ["구로구", "양천구", "광진구"],
     },
 }
 
@@ -81,7 +90,7 @@ def build_cmd(algorithm: str, district: str, seed: int, args: argparse.Namespace
     split_part = "" if args.split_mode == "random" else f"{args.split_mode}_"
     topk_part = f"_topk{args.candidate_top_k}" if args.include_topk_in_tag else ""
     tag = f"{args.experiment_label}_{split_part}{algorithm}_{district}{topk_part}_s{seed}"
-    return [
+    cmd = [
         sys.executable,
         "-m",
         module,
@@ -91,8 +100,6 @@ def build_cmd(algorithm: str, district: str, seed: int, args: argparse.Namespace
         district,
         "--n-train-dates",
         str(args.n_train_dates),
-        "--bc-epochs",
-        "0",
         "--future-mode",
         "forecast_projected_travel",
         "--future-horizon",
@@ -117,17 +124,42 @@ def build_cmd(algorithm: str, district: str, seed: int, args: argparse.Namespace
         tag,
         "--device",
         args.device,
-        "--episodes",
-        str(args.episodes),
-        "--eval-every",
-        str(args.eval_every),
         "--split-mode",
         args.split_mode,
-        "--normalize-advantages",
         "--seed",
         str(seed),
         "--progress",
     ]
+    if algorithm in {"a2c", "reinforce"}:
+        cmd.extend([
+            "--episodes",
+            str(args.episodes),
+            "--eval-every",
+            str(args.eval_every),
+            "--normalize-advantages",
+        ])
+    elif algorithm == "ppo":
+        cmd.extend([
+            "--total-timesteps",
+            str(args.total_timesteps),
+            "--eval-every",
+            str(args.eval_every_timesteps),
+            "--learning-rate",
+            str(args.ppo_learning_rate),
+            "--ent-coef",
+            str(args.ppo_ent_coef),
+            "--target-kl",
+            str(args.ppo_target_kl),
+            "--clip-range",
+            str(args.ppo_clip_range),
+            "--n-epochs",
+            str(args.ppo_n_epochs),
+            "--n-steps",
+            str(args.ppo_n_steps),
+            "--batch-size",
+            str(args.ppo_batch_size),
+        ])
+    return cmd
 
 
 def history_path(algorithm: str, district: str, seed: int, args: argparse.Namespace) -> Path:
@@ -146,6 +178,7 @@ def base_history_paths(algorithm: str, district: str, args: argparse.Namespace) 
         return [
             ROOT / "logs" / f"{prefix}_interactive_{args.split_mode}_topk12_{algorithm}_{district}" / "history.npy",
             ROOT / "logs" / f"{prefix}_seedci_{args.split_mode}_{algorithm}_{district}_s42" / "history.npy",
+            ROOT / "logs" / f"{prefix}_{args.experiment_label}_{args.split_mode}_{algorithm}_{district}_topk{args.candidate_top_k}_s42" / "history.npy",
         ]
     return [
         ROOT / "logs" / f"{prefix}_interactive_topk12_{algorithm}_{district}" / "history.npy",
@@ -180,12 +213,12 @@ def read_result(algorithm: str, group: str, district: str, seed: int, baseline: 
     arr = np.load(path, allow_pickle=True)
     rows = [dict(x) for x in arr.tolist()]
     values = np.array([float(row["eval_reward"]) for row in rows])
-    points = np.array([float(row.get("episode", i)) for i, row in enumerate(rows)])
+    points = np.array([float(row.get("episode", row.get("timesteps", i))) for i, row in enumerate(rows)])
     best_idx = int(values.argmax())
     best_reward = float(values[best_idx])
     final_reward = float(values[-1])
     return {
-        "algorithm": algorithm.upper() if algorithm == "a2c" else "REINFORCE",
+        "algorithm": algorithm.upper(),
         "group": group,
         "district": district,
         "seed": seed,
@@ -341,6 +374,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run A2C/REINFORCE seed sensitivity experiments.")
     parser.add_argument("--episodes", type=int, default=500)
     parser.add_argument("--eval-every", type=int, default=50)
+    parser.add_argument("--total-timesteps", type=int, default=DEFAULT_RUNNER_VALUES["total_timesteps"])
+    parser.add_argument("--eval-every-timesteps", type=int, default=DEFAULT_RUNNER_VALUES["eval_every_timesteps"])
     parser.add_argument("--n-train-dates", type=int, default=200)
     parser.add_argument("--candidate-top-k", type=int, default=12)
     parser.add_argument("--device", choices=["cpu", "mps"], default="cpu")
@@ -349,8 +384,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--algorithms",
         default="a2c,reinforce",
-        help="seed 반복 실험 대상 알고리즘. 예: a2c 또는 a2c,reinforce",
+        help="seed 반복 실험 대상 알고리즘. 예: a2c 또는 a2c,reinforce,ppo",
     )
+    parser.add_argument("--ppo-learning-rate", type=float, default=DEFAULT_RUNNER_VALUES["ppo_learning_rate"])
+    parser.add_argument("--ppo-ent-coef", type=float, default=DEFAULT_RUNNER_VALUES["ppo_ent_coef"])
+    parser.add_argument("--ppo-target-kl", type=float, default=DEFAULT_RUNNER_VALUES["ppo_target_kl"])
+    parser.add_argument("--ppo-clip-range", type=float, default=DEFAULT_RUNNER_VALUES["ppo_clip_range"])
+    parser.add_argument("--ppo-n-epochs", type=int, default=DEFAULT_RUNNER_VALUES["ppo_n_epochs"])
+    parser.add_argument("--ppo-n-steps", type=int, default=DEFAULT_RUNNER_VALUES["ppo_n_steps"])
+    parser.add_argument("--ppo-batch-size", type=int, default=DEFAULT_RUNNER_VALUES["ppo_batch_size"])
     parser.add_argument(
         "--districts",
         default="",

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import csv
 import random
 from pathlib import Path
 
@@ -30,6 +31,7 @@ import torch
 from sb3_contrib import MaskablePPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 from torch.utils.data import DataLoader, TensorDataset
+from tqdm.auto import tqdm
 
 from src.agents.baselines import get_policy
 from src.agents.ours.common.bc_utils import collect_bc_data
@@ -108,7 +110,7 @@ def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_ev
 
 
 def evaluate(model: MaskablePPO, episodes: list, args: argparse.Namespace, seed: int) -> tuple[float, list[float]]:
-    """고정 7일 평가셋에서 greedy PPO policy의 평균 reward를 계산한다."""
+    """고정 holdout 평가셋에서 greedy PPO policy의 평균 reward를 계산한다."""
     rewards = []
     for ep in episodes:
         env = make_env(ep, args, seed=seed, for_eval=True)
@@ -192,8 +194,8 @@ def print_eval_table(
     model_rewards: list[float],
     eval_dates: list[str],
 ) -> None:
-    """7일 평가 결과를 표로 출력한다."""
-    print(f"\n=== {label} vs 휴리스틱 (7일) ===")
+    """holdout 평가 결과를 표로 출력한다."""
+    print(f"\n=== {label} vs 휴리스틱 ({len(eval_dates)}일) ===")
     print(f"{'날짜':12}{'휴리스틱':>10}{'모델':>10}{'Δ(M-휴)':>9}")
     for date, h, r in zip(eval_dates, heuristic_rewards, model_rewards):
         print(f"{date:12}{h:>10.1f}{r:>10.1f}{r - h:>9.1f}")
@@ -201,6 +203,63 @@ def print_eval_table(
         f"{'평균':12}{np.mean(heuristic_rewards):>10.1f}{np.mean(model_rewards):>10.1f}"
         f"{np.mean(model_rewards) - np.mean(heuristic_rewards):>9.1f}"
     )
+
+
+def collect_ppo_train_metrics(model: MaskablePPO) -> dict[str, float]:
+    """SB3 logger에서 PPO update 진단 지표를 읽는다.
+
+    PPO의 clipping 안정화는 reward만으로 직접 확인하기 어렵다. 따라서
+    learn() 직후 logger에 남는 approx_kl, clip_fraction, entropy_loss 등을
+    history와 csv에 같이 저장해 policy update가 얼마나 보수적으로 진행됐는지
+    확인한다.
+    """
+    metric_names = [
+        "train/approx_kl",
+        "train/clip_fraction",
+        "train/clip_range",
+        "train/entropy_loss",
+        "train/explained_variance",
+        "train/learning_rate",
+        "train/loss",
+        "train/policy_gradient_loss",
+        "train/value_loss",
+    ]
+    values = getattr(model.logger, "name_to_value", {})
+    metrics: dict[str, float] = {}
+    for name in metric_names:
+        if name not in values:
+            continue
+        value = values[name]
+        try:
+            metrics[name.replace("train/", "")] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return metrics
+
+
+def save_ppo_diagnostics(out_dir: Path, history: list[dict]) -> None:
+    """history에 저장된 PPO 진단 지표를 csv로도 저장한다."""
+    metric_keys = [
+        "timesteps",
+        "eval_reward",
+        "approx_kl",
+        "clip_fraction",
+        "clip_range",
+        "entropy_loss",
+        "explained_variance",
+        "learning_rate",
+        "loss",
+        "policy_gradient_loss",
+        "value_loss",
+    ]
+    rows = [row for row in history if any(key in row for key in metric_keys[2:])]
+    if not rows:
+        return
+    with (out_dir / "ppo_diagnostics.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=metric_keys)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({key: row.get(key, "") for key in metric_keys})
 
 
 def parse_args() -> argparse.Namespace:
@@ -279,8 +338,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--split-mode",
         choices=["random", "chronological"],
-        default="random",
-        help="random: seed=42 셔플 후 80/20, chronological: 시간순 80/20 (계절 OOD 평가)",
+        default="chronological",
+        help="chronological: 시간순 80/20 holdout, random: seed=42 셔플 후 80/20",
     )
     return parser.parse_args()
 
@@ -426,6 +485,13 @@ def main() -> None:
     # KLtoBC_PPO 는 vanilla PPO.learn() 시그니처라 use_masking 인자를 받지 않는다.
     learn_kwargs = {"use_masking": True} if args.algo == "ppo" else {}
     steps_done = 0
+    pbar = tqdm(
+        total=args.total_timesteps,
+        desc=f"PPO {args.district}",
+        unit="step",
+        dynamic_ncols=True,
+        disable=not args.progress,
+    )
     while steps_done < args.total_timesteps:
         chunk = min(args.eval_every, args.total_timesteps - steps_done)
         model.learn(
@@ -435,8 +501,12 @@ def main() -> None:
             **learn_kwargs,
         )
         steps_done += chunk
+        pbar.update(chunk)
+        train_metrics = collect_ppo_train_metrics(model)
         eval_reward, _ = evaluate(model, eval_episodes, args, args.seed)
-        history.append({"timesteps": steps_done, "eval_reward": eval_reward})
+        history_row = {"timesteps": steps_done, "eval_reward": eval_reward}
+        history_row.update(train_metrics)
+        history.append(history_row)
         if eval_reward > best_reward:
             best_reward = eval_reward
             best_step = steps_done
@@ -449,16 +519,31 @@ def main() -> None:
                 model.policy.load_state_dict(best_policy_state)
             if args.finetune_patience > 0:
                 patience_left -= 1
-        print(f"timesteps={steps_done:7d} eval={eval_reward:8.2f}")
+        pbar_postfix = {"eval": f"{eval_reward:.1f}", "best": f"{best_reward:.1f}"}
+        if "approx_kl" in train_metrics:
+            pbar_postfix["kl"] = f"{train_metrics['approx_kl']:.4f}"
+        if "clip_fraction" in train_metrics:
+            pbar_postfix["clip"] = f"{train_metrics['clip_fraction']:.3f}"
+        pbar.set_postfix(**pbar_postfix)
+        diag = ""
+        if "approx_kl" in train_metrics or "clip_fraction" in train_metrics:
+            diag = (
+                f" kl={train_metrics.get('approx_kl', float('nan')):7.4f}"
+                f" clip={train_metrics.get('clip_fraction', float('nan')):6.3f}"
+                f" ent={train_metrics.get('entropy_loss', float('nan')):7.3f}"
+            )
+        print(f"timesteps={steps_done:7d} eval={eval_reward:8.2f}{diag}")
         if args.finetune_patience > 0 and patience_left <= 0:
             print(f"fine-tuning early stop: best_step={best_step}, best_reward={best_reward:.2f}")
             break
+    pbar.close()
 
     final_mean, final_rewards = evaluate(model, eval_episodes, args, args.seed)
     model.save(out_dir / "final_model")
     if not history or abs(float(history[-1]["eval_reward"]) - final_mean) > 1e-9:
         history.append({"timesteps": steps_done, "eval_reward": final_mean, "stage": "final"})
     np.save(out_dir / "history.npy", np.asarray(history, dtype=object))
+    save_ppo_diagnostics(out_dir, history)
 
     print(f"best reward: {best_reward:.2f} at timesteps {best_step}")
     print(f"final reward: {final_mean:.2f}")

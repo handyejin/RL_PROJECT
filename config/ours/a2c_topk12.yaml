@@ -1,4 +1,4 @@
-# A2C 보고서 기준 설정: 수정 state + 수요예측 + Top-K 12, BC 없음
+# A2C 보고서 기준 설정: 수정 state + 수요예측 + Top-K 12
 
 algorithm: a2c
 district: 강남구
@@ -12,7 +12,7 @@ training:
   episodes: 500
   eval_every: 50
   n_train_dates: 200
-  bc_epochs: 0
+  split_mode: chronological
   tag: yaml_a2c_topk12
   device: cpu
   progress: true

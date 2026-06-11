@@ -89,7 +89,6 @@ def build_args(config: dict[str, Any], cli: argparse.Namespace) -> SimpleNamespa
             "n_train_dates": "n_train_dates",
             "seed": "seed",
             "split_mode": "split_mode",
-            "bc_epochs": "bc_epochs",
             "tag": "tag",
             "device": "device",
             "progress": "progress",

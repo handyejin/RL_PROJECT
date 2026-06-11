@@ -1,3 +1,9 @@
+####################
+# 작성자 : 박제영
+# 설명   : REINFORCE/A2C/DQN/PPO/Bandit과 VAE latent 생성을 터미널에서 선택 실행하는 wrapper.
+#          팀원이 같은 전처리 데이터와 Top-K 설정으로 실험을 재현할 수 있도록 명령을 생성한다.
+####################
+
 """우리 실험을 터미널에서 선택 실행하는 wrapper.
 
 REINFORCE, A2C, DQN, PPO, Contextual Bandit(LinUCB), VAE latent 생성을
@@ -119,9 +125,8 @@ def parse_args() -> argparse.Namespace:
         "--split-mode",
         choices=["random", "chronological"],
         default=DEFAULT_RUNNER_VALUES["split_mode"],
-        help="REINFORCE/A2C/PPO용 날짜 분할. random은 seed=42 셔플 80/20, chronological은 시간순 80/20.",
+        help="ours 알고리즘 날짜 분할. 기본값 chronological은 시간순 80/20 holdout이다.",
     )
-    parser.add_argument("--bc-epochs", type=int, default=DEFAULT_RUNNER_VALUES["bc_epochs"])
     parser.add_argument(
         "--future-mode",
         choices=["none", "oracle_net", "oracle_inout", "history_net", "forecast_projected_travel"],

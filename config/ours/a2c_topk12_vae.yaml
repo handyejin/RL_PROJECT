@@ -1,4 +1,4 @@
-# A2C VAE 실험 설정: forecast Top-K 12 + VAE latent state 보강, BC 없음
+# A2C VAE 실험 설정: forecast Top-K 12 + VAE latent state 보강
 
 algorithm: a2c
 district: 강남구
@@ -13,7 +13,7 @@ training:
   episodes: 500
   eval_every: 50
   n_train_dates: 200
-  bc_epochs: 0
+  split_mode: chronological
   tag: yaml_a2c_topk12_vae
   device: cpu
   progress: true

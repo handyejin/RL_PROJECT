@@ -1,4 +1,4 @@
-# Contextual Bandit 보고서 후보 설정: LinUCB, BC 없음
+# Contextual Bandit 보고서 후보 설정: LinUCB
 
 algorithm: bandit
 district: 강남구
@@ -12,7 +12,7 @@ training:
   total_timesteps: 170000
   eval_every_timesteps: 20000
   n_train_dates: 200
-  bc_epochs: 0
+  split_mode: chronological
   tag: yaml_bandit_topk12
   device: cpu
   progress: true

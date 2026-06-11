@@ -1,10 +1,16 @@
+####################
+# 작성자 : 박제영
+# 설명   : A2C(Actor-Critic, 1-step TD advantage) 기반 따릉이 재배치 agent.
+#          Actor는 이동 정류소 정책을, Critic은 현재 상태의 가치 V(s)를 학습한다.
+####################
+
 """A2C 기반 따릉이 재배치 agent.
 
 기본 알고리즘(2):
     A2C / Actor-Critic
 
-고도화 알고리즘(2'):
-    A2C + future-demand state + Behavior Cloning pretraining
+최종 실험 설정:
+    A2C + 수요예측 state + Top-K 후보 action
 
 RL 정의:
     State:
@@ -22,20 +28,14 @@ A2C update:
     actor_loss = -log pi(a|s) * advantage
     critic_loss = MSE(target, V(s))
 
-Fine-tuning 보호:
-    BC로 얻은 좋은 policy가 RL update 중 무너지지 않도록
-    validation early stopping, best rollback, anchor KL loss를 선택적으로 사용한다.
-
 실행 예:
-    PYTHONPATH=. python -m src.agents.actor_critic --episodes 200
-    PYTHONPATH=. python -m src.agents.actor_critic --bc-epochs 30 --bc-dates 200 \
-        --future-mode oracle_net --future-horizon 6 --bc-policy future_heuristic
+    PYTHONPATH=. python -m src.agents.ours.algorithms.a2c.core \
+        --episodes 500 --split-mode chronological --candidate-top-k 9
 """
 
 from __future__ import annotations
 
 import argparse
-import copy
 import random
 from collections import deque
 from dataclasses import dataclass
@@ -46,35 +46,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
-from torch.utils.data import DataLoader, TensorDataset
 from tqdm.auto import tqdm
 
-from src.agents.baselines import get_policy
 from src.agents.ours.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
 from src.agents.ours.common.date_split import compute_split
 from src.agents.ours.common.episode_cache import load_episodes_cached
+from src.agents.ours.common.experiment_utils import (
+    evaluate_most_imbalanced as evaluate_heuristic,
+    print_eval_table,
+)
 from src.agents.ours.common.future_demand import build_history_net_profile, maybe_wrap_future_demand
-from src.agents.ours.common.reward_shaping import maybe_wrap_agent_reward_shaping
 from src.agents.ours.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
 from src.envs.data_loader import load_episode
 from src.envs.rebalance_env import RebalanceEnv
 
 
-def date_range(start: str, end: str) -> list[str]:
-    """시작일부터 종료일까지 날짜 문자열 목록을 만든다."""
-    import datetime
-
-    d = datetime.date.fromisoformat(start)
-    end_d = datetime.date.fromisoformat(end)
-    dates = []
-    while d <= end_d:
-        dates.append(d.isoformat())
-        d += datetime.timedelta(days=1)
-    return dates
-
-
 # TRAIN_DATES / EVAL_DATES 는 main() 에서 --split-mode 에 따라 compute_split 으로 생성한다.
+# 최종 보고서 기준은 chronological split(2025-10-20~2025-12-31 holdout)이다.
 
 
 ENV_KW = dict(
@@ -200,8 +189,6 @@ def make_env(ep, args: argparse.Namespace, seed: int | None = None, for_eval: bo
     env = RebalanceEnv(ep, seed=seed, **ENV_KW)
     env = maybe_wrap_future_demand(env, args)
     env = maybe_wrap_vae_latent(env, args)
-    if not for_eval:
-        env = maybe_wrap_agent_reward_shaping(env, args)
     return maybe_wrap_candidate_actions(env, args)
 
 
@@ -232,8 +219,6 @@ def update_a2c(
     gamma: float,
     device: torch.device,
     normalize_advantages: bool,
-    anchor_policy: PolicyNetwork | None = None,
-    anchor_coef: float = 0.0,
 ) -> tuple[float, float]:
     """TD target과 advantage를 이용해 actor/critic을 업데이트한다."""
     # batch_state: s_t, batch_next_state: s_{t+1}
@@ -266,21 +251,7 @@ def update_a2c(
     logits = policy(batch_state, batch_mask)
     dist = Categorical(logits=logits)
     log_prob = dist.log_prob(batch_action).unsqueeze(1)
-    rl_actor_loss = -(log_prob * advantage).mean()
-
-    # Anchor KL loss:
-    #   BC 직후 policy(pi_anchor)에서 너무 멀어지지 않도록 KL(pi_anchor || pi_current)를 더한다.
-    #   BC policy가 좋은 출발점일 때 RL fine-tuning이 이를 망가뜨리는 현상을 완화한다.
-    anchor_loss = torch.tensor(0.0, device=device)
-    if anchor_policy is not None and anchor_coef > 0.0:
-        with torch.no_grad():
-            anchor_logits = anchor_policy(batch_state, batch_mask)
-            anchor_probs = torch.softmax(anchor_logits, dim=-1)
-            anchor_log_probs = torch.log_softmax(anchor_logits, dim=-1)
-        current_log_probs = torch.log_softmax(logits, dim=-1)
-        anchor_loss = (anchor_probs * (anchor_log_probs - current_log_probs)).sum(dim=-1).mean()
-
-    actor_loss = rl_actor_loss + anchor_coef * anchor_loss
+    actor_loss = -(log_prob * advantage).mean()
     policy_optim.zero_grad()
     actor_loss.backward()
     policy_optim.step()
@@ -307,8 +278,6 @@ def train_episode(
     device: torch.device,
     seed: int,
     normalize_advantages: bool,
-    anchor_policy: PolicyNetwork | None,
-    anchor_coef: float,
 ) -> TrainStats:
     """한 episode를 실행하면서 batch_size마다 A2C update를 수행한다."""
     state, _ = env.reset(seed=seed)
@@ -338,8 +307,6 @@ def train_episode(
                 gamma,
                 device,
                 normalize_advantages,
-                anchor_policy,
-                anchor_coef,
             )
             memory.clear()
 
@@ -347,177 +314,6 @@ def train_episode(
         state = next_state
 
     return TrainStats(total, actor_loss, critic_loss)
-
-
-def masked_heuristic_action(env) -> int:
-    """현재 action mask 안에서 가장 불균형한 정류소를 고르는 teacher."""
-    truck = env.trucks[env.current_truck]
-    bikes = env.bikes.astype(np.float32)
-    target = env.data.capacity.astype(np.float32) * env.target_fill_ratio
-    if truck.load == 0:
-        scores = bikes - target
-    elif truck.load >= env.truck_capacity:
-        scores = target - bikes
-    else:
-        scores = np.abs(bikes - target).astype(np.float32)
-    scores = scores.copy()
-    mask = env.action_masks()
-    scores[~mask] = -np.inf
-    best = int(np.argmax(scores))
-    if not np.isfinite(scores[best]):
-        return int(np.flatnonzero(mask)[0])
-    return best
-
-
-def future_heuristic_action(env, horizon: int) -> int:
-    """향후 수요를 반영한 projected imbalance 기준 teacher action."""
-    truck = env.trucks[env.current_truck]
-    bikes = env.bikes.astype(np.float32)
-    t_end = min(env.t + horizon, env.T)
-    if t_end > env.t:
-        # 미래 H step의 대여/반납을 현재 재고에 반영해 예상 재고를 만든다.
-        rentals = env.data.rentals[env.t:t_end].sum(axis=0).astype(np.float32)
-        returns = env.data.returns[env.t:t_end].sum(axis=0).astype(np.float32)
-        bikes = np.clip(bikes + returns - rentals, 0.0, env.data.capacity.astype(np.float32))
-    target = env.data.capacity.astype(np.float32) * env.target_fill_ratio
-    if truck.load == 0:
-        scores = bikes - target
-    elif truck.load >= env.truck_capacity:
-        scores = target - bikes
-    else:
-        scores = np.abs(bikes - target).astype(np.float32)
-    scores = scores.copy()
-    mask = env.action_masks()
-    scores[~mask] = -np.inf
-    best = int(np.argmax(scores))
-    if not np.isfinite(scores[best]):
-        return int(np.flatnonzero(mask)[0])
-    return best
-
-
-def forecast_heuristic_action(env) -> int:
-    """예측된 1시간 대여/반납을 반영한 projected imbalance teacher action."""
-    truck = env.trucks[env.current_truck]
-    bikes = env.bikes.astype(np.float32)
-    forecast = getattr(env.data, "agent_demand_forecast", None)
-    if forecast is not None and len(forecast) > 0:
-        idx = min(int(env.t), len(forecast) - 1)
-        net = forecast[idx, :, 2].astype(np.float32)
-        bikes = np.clip(bikes + net, 0.0, env.data.capacity.astype(np.float32))
-    target = env.data.capacity.astype(np.float32) * env.target_fill_ratio
-    if truck.load == 0:
-        scores = bikes - target
-    elif truck.load >= env.truck_capacity:
-        scores = target - bikes
-    else:
-        scores = np.abs(bikes - target).astype(np.float32)
-    scores = scores.copy()
-    mask = env.action_masks()
-    scores[~mask] = -np.inf
-    best = int(np.argmax(scores))
-    if not np.isfinite(scores[best]):
-        return int(np.flatnonzero(mask)[0])
-    return best
-
-
-def collect_bc_data(episodes: list, args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """teacher policy가 만든 state-action pair를 수집한다."""
-    states, actions, masks = [], [], []
-    for i, ep in enumerate(episodes[: args.bc_dates]):
-        env = make_env(ep, args, seed=args.seed + i)
-        state, _ = env.reset(seed=args.seed + i)
-        done = False
-        while not done:
-            mask = env.action_masks()
-            if hasattr(env, "teacher_action"):
-                action = int(env.teacher_action(args.bc_policy, args.future_horizon))
-            elif args.bc_policy == "future_heuristic":
-                action = future_heuristic_action(env, args.future_horizon)
-            elif args.bc_policy == "forecast_heuristic":
-                action = forecast_heuristic_action(env)
-            else:
-                action = masked_heuristic_action(env)
-            states.append(state.copy())
-            actions.append(action)
-            masks.append(mask.copy())
-            state, _, terminated, truncated, _ = env.step(action)
-            done = terminated or truncated
-    return np.asarray(states, np.float32), np.asarray(actions, np.int64), np.asarray(masks, bool)
-
-
-def pretrain_behavior_cloning(
-    policy: PolicyNetwork,
-    train_episodes: list,
-    val_episodes: list,
-    args: argparse.Namespace,
-    device: torch.device,
-) -> dict[str, float | dict[str, torch.Tensor]]:
-    """teacher action을 CrossEntropy로 모방해 actor를 먼저 초기화한다."""
-    states, actions, masks = collect_bc_data(train_episodes, args)
-    loader = DataLoader(
-        TensorDataset(torch.from_numpy(states), torch.from_numpy(actions), torch.from_numpy(masks)),
-        batch_size=args.bc_batch_size,
-        shuffle=True,
-    )
-    optimizer = torch.optim.Adam(policy.parameters(), lr=args.bc_lr)
-    last_loss = 0.0
-    last_acc = 0.0
-    best_val_reward = -np.inf
-    best_epoch = 0
-    best_state = copy.deepcopy(policy.state_dict())
-    patience_left = args.bc_patience
-    for epoch in range(args.bc_epochs):
-        total_loss = 0.0
-        total = 0
-        correct = 0
-        for x, y, m in loader:
-            x = x.to(device, dtype=torch.float32)
-            y = y.to(device, dtype=torch.long)
-            m = m.to(device, dtype=torch.bool)
-
-            # BC loss:
-            #   teacher action y를 정답 label로 보고 actor를 먼저 지도학습한다.
-            #   불가능한 action은 mask로 제거한다.
-            logits = policy(x, m)
-            loss = F.cross_entropy(logits, y)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            total_loss += float(loss.detach().cpu()) * len(y)
-            correct += int((logits.argmax(dim=1) == y).sum().item())
-            total += len(y)
-        last_loss = total_loss / max(total, 1)
-        last_acc = correct / max(total, 1)
-        val_reward = None
-        if val_episodes:
-            # BC validation은 teacher label 정확도 대신 실제 환경 reward로 본다.
-            val_reward, _ = evaluate(policy, val_episodes, args, device, args.seed)
-            if val_reward > best_val_reward:
-                best_val_reward = val_reward
-                best_epoch = epoch + 1
-                best_state = copy.deepcopy(policy.state_dict())
-                patience_left = args.bc_patience
-            else:
-                patience_left -= 1
-        if epoch == 0 or (epoch + 1) % max(args.bc_log_every, 1) == 0:
-            msg = f"  BC epoch {epoch+1}/{args.bc_epochs}: loss={last_loss:.4f}, acc={last_acc:.3f}"
-            if val_reward is not None:
-                msg += f", val_reward={val_reward:.2f}"
-            print(msg)
-        if val_episodes and args.bc_patience > 0 and patience_left <= 0:
-            print(f"  BC early stop: best_epoch={best_epoch}, best_val_reward={best_val_reward:.2f}")
-            break
-    if val_episodes:
-        # validation reward가 가장 좋았던 BC policy를 fine-tuning 시작점으로 사용한다.
-        policy.load_state_dict(best_state)
-    return {
-        "bc_samples": float(len(actions)),
-        "bc_loss": last_loss,
-        "bc_acc": last_acc,
-        "bc_best_val_reward": float(best_val_reward),
-        "bc_best_epoch": float(best_epoch),
-        "bc_state": copy.deepcopy(policy.state_dict()),
-    }
 
 
 def evaluate(policy: PolicyNetwork, episodes: list, args: argparse.Namespace, device: torch.device, seed: int) -> tuple[float, list[float]]:
@@ -537,45 +333,11 @@ def evaluate(policy: PolicyNetwork, episodes: list, args: argparse.Namespace, de
     return float(np.mean(rewards)), rewards
 
 
-def evaluate_heuristic(episodes: list, seed: int) -> tuple[float, list[float]]:
-    """기존 most_imbalanced 휴리스틱의 holdout 평균 reward를 계산한다."""
-    heuristic = get_policy("most_imbalanced")
-    rewards = []
-    for ep in episodes:
-        env = RebalanceEnv(ep, **ENV_KW)
-        env.reset(seed=seed)
-        done = False
-        total = 0.0
-        while not done:
-            _, reward, terminated, truncated, _ = env.step(heuristic.act(env))
-            total += float(reward)
-            done = terminated or truncated
-        rewards.append(total)
-    return float(np.mean(rewards)), rewards
-
-
-def print_eval_table(
-    label: str,
-    heuristic_rewards: list[float],
-    model_rewards: list[float],
-    eval_dates: list[str],
-) -> None:
-    """평가 결과를 표로 출력한다."""
-    print(f"\n=== {label} vs 휴리스틱 ({len(eval_dates)}일) ===")
-    print(f"{'날짜':12}{'휴리스틱':>10}{'모델':>10}{'Δ(M-휴)':>9}")
-    for date, h, r in zip(eval_dates, heuristic_rewards, model_rewards):
-        print(f"{date:12}{h:>10.1f}{r:>10.1f}{r - h:>9.1f}")
-    print(
-        f"{'평균':12}{np.mean(heuristic_rewards):>10.1f}{np.mean(model_rewards):>10.1f}"
-        f"{np.mean(model_rewards) - np.mean(heuristic_rewards):>9.1f}"
-    )
-
-
 def parse_args() -> argparse.Namespace:
     """A2C 실험에 필요한 CLI 옵션을 정의한다.
 
-    원본 state와 수정 state 실행 파일이 같은 core를 사용하므로
-    forecast/capacity 보강, 후보 action, BC, anchor KL, rollback 옵션을 함께 둔다.
+    최종 보고서 기준인 1-step TD actor-critic, 수요예측 state, Top-K 후보
+    action, 73일 holdout 평가만 남겨 흐름을 단순하게 유지한다.
     """
     parser = argparse.ArgumentParser(description="A2C actor-critic agent")
     parser.add_argument("--district", default="마포구")
@@ -594,23 +356,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr-value", type=float, default=3e-4)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--memory-size", type=int, default=200)
-    parser.add_argument("--bc-epochs", type=int, default=0)
-    parser.add_argument("--bc-dates", type=int, default=60)
-    parser.add_argument("--bc-val-dates", type=int, default=0)
-    parser.add_argument("--bc-patience", type=int, default=0)
-    parser.add_argument("--bc-lr", type=float, default=1e-3)
-    parser.add_argument("--bc-batch-size", type=int, default=256)
-    parser.add_argument("--bc-log-every", type=int, default=5)
-    parser.add_argument("--bc-only", action="store_true")
-    parser.add_argument(
-        "--bc-policy",
-        choices=["masked_heuristic", "future_heuristic", "forecast_heuristic"],
-        default="masked_heuristic",
-    )
     parser.add_argument("--normalize-advantages", action="store_true")
-    parser.add_argument("--anchor-coef", type=float, default=0.0)
-    parser.add_argument("--rollback-to-best-on-eval", action="store_true")
-    parser.add_argument("--finetune-patience", type=int, default=0)
     parser.add_argument(
         "--future-mode",
         choices=[
@@ -639,23 +385,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-zone-count", type=int, default=3)
     parser.add_argument("--candidate-zone-penalty", type=float, default=0.0)
     parser.add_argument("--candidate-feature-mode", choices=["none", "basic"], default="none")
-    parser.add_argument("--agent-shaping-mode", choices=["projected_imbalance"], default="projected_imbalance")
-    parser.add_argument("--agent-shaping-scale", type=float, default=0.0)
-    parser.add_argument("--agent-shaping-gamma", type=float, default=0.99)
     parser.add_argument("--residual-policy", action="store_true")
     parser.add_argument("--residual-temp", type=float, default=1.0)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps"])
     parser.add_argument(
         "--split-mode",
         choices=["random", "chronological"],
-        default="random",
-        help="random: seed=42 셔플 후 80/20, chronological: 시간순 80/20 (계절 OOD 평가)",
+        default="chronological",
+        help="chronological: 시간순 80/20 holdout, random: seed=42 셔플 후 80/20.",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    """데이터 준비부터 BC 선택 적용, A2C 학습, best/final 평가까지 수행한다."""
+    """데이터 준비, A2C 학습, best/final 평가를 순서대로 수행한다."""
     args = parse_args()
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -666,12 +409,9 @@ def main() -> None:
 
     train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
     train_dates = train_dates_all[: args.n_train_dates]
-    val_start = args.n_train_dates
-    val_end = args.n_train_dates + args.bc_val_dates
-    val_dates = train_dates_all[val_start:val_end]
     print(
         f"[A2C:{args.district}] split={args.split_mode} loading episodes "
-        f"(train={len(train_dates)}, val={len(val_dates)}, eval={len(eval_dates)})...",
+        f"(train={len(train_dates)}, eval={len(eval_dates)})...",
         flush=True,
     )
     train_episodes = load_episodes(
@@ -681,17 +421,6 @@ def main() -> None:
         None if args.no_episode_cache else args.episode_cache_dir,
         f"A2C {args.district} load train" if args.progress else None,
     )
-    bc_val_episodes = (
-        load_episodes(
-            val_dates,
-            args.district,
-            args.processed_dir,
-            None if args.no_episode_cache else args.episode_cache_dir,
-            f"A2C {args.district} load val" if args.progress else None,
-        )
-        if args.bc_val_dates > 0
-        else []
-    )
     eval_episodes = load_episodes(
         eval_dates,
         args.district,
@@ -699,7 +428,7 @@ def main() -> None:
         None if args.no_episode_cache else args.episode_cache_dir,
         f"A2C {args.district} load eval" if args.progress else None,
     )
-    all_episodes = train_episodes + bc_val_episodes + eval_episodes
+    all_episodes = train_episodes + eval_episodes
     print(f"[A2C:{args.district}] applying capacity/forecast data...", flush=True)
     capacity_stats = apply_capacity_override(
         all_episodes,
@@ -737,12 +466,6 @@ def main() -> None:
     history = []
     best_reward = -np.inf
     best_episode = 0
-    best_state = {
-        "policy": copy.deepcopy(policy.state_dict()),
-        "value": copy.deepcopy(value.state_dict()),
-    }
-    anchor_policy = None
-    patience_left = args.finetune_patience
 
     print(f"=== A2C | tag={args.tag} ===")
     print(f"device={device}, obs_dim={obs_dim}, n_actions={n_actions}")
@@ -764,48 +487,12 @@ def main() -> None:
             f"latent_dim={int(vae_stats['vae_latent_dim'])}"
         )
     print(f"heuristic mean reward: {heuristic_mean:.2f}")
-    if bc_val_episodes:
-        print(f"BC validation dates: {len(bc_val_episodes)}")
 
-    if args.bc_epochs > 0:
-        bc_stats = pretrain_behavior_cloning(policy, train_episodes, bc_val_episodes, args, device)
-        print(
-            f"BC done: samples={int(bc_stats['bc_samples'])}, "
-            f"loss={bc_stats['bc_loss']:.4f}, acc={bc_stats['bc_acc']:.3f}"
-        )
-        if bc_val_episodes:
-            print(
-                f"BC best validation: epoch={int(bc_stats['bc_best_epoch'])}, "
-                f"reward={bc_stats['bc_best_val_reward']:.2f}"
-            )
-        if args.anchor_coef > 0.0:
-            # anchor_policy는 BC 직후 policy를 고정 복사한 것이다.
-            anchor_policy = PolicyNetwork(
-                obs_dim,
-                n_actions,
-                args.hidden,
-                residual_policy=args.residual_policy,
-                residual_temp=args.residual_temp,
-            ).to(device)
-            anchor_policy.load_state_dict(policy.state_dict())
-            anchor_policy.eval()
-            for param in anchor_policy.parameters():
-                param.requires_grad_(False)
-        eval_reward, _ = evaluate(policy, eval_episodes, args, device, args.seed)
-        history.append({"episode": 0, "eval_reward": eval_reward, "stage": "bc"})
-        best_reward = eval_reward
-        best_state = {
-            "policy": copy.deepcopy(policy.state_dict()),
-            "value": copy.deepcopy(value.state_dict()),
-        }
-        torch.save({"policy": policy.state_dict(), "value": value.state_dict()}, best_dir / "best_model.pt")
-        print(f"episode={0:4d} eval={eval_reward:8.2f} stage=BC")
-
-    if args.bc_only or args.episodes <= 0:
+    if args.episodes <= 0:
         final_mean, final_rewards = evaluate(policy, eval_episodes, args, device, args.seed)
         torch.save({"policy": policy.state_dict(), "value": value.state_dict()}, out_dir / "actor_critic_final.pt")
         np.save(out_dir / "history.npy", np.asarray(history or [{"episode": 0, "eval_reward": final_mean}], dtype=object))
-        print_eval_table("a2c_bc_only", heuristic_rewards, final_rewards, eval_dates)
+        print_eval_table("a2c_final", heuristic_rewards, final_rewards, eval_dates)
         return
 
     episode_iter = range(1, args.episodes + 1)
@@ -834,8 +521,6 @@ def main() -> None:
             device,
             args.seed + episode,
             args.normalize_advantages,
-            anchor_policy,
-            args.anchor_coef,
         )
 
         if episode == 1 or episode % args.eval_every == 0:
@@ -852,19 +537,7 @@ def main() -> None:
             if eval_reward > best_reward:
                 best_reward = eval_reward
                 best_episode = episode
-                best_state = {
-                    "policy": copy.deepcopy(policy.state_dict()),
-                    "value": copy.deepcopy(value.state_dict()),
-                }
-                patience_left = args.finetune_patience
                 torch.save({"policy": policy.state_dict(), "value": value.state_dict()}, best_dir / "best_model.pt")
-            else:
-                if args.rollback_to_best_on_eval:
-                    # 평가 성능이 나빠지면 best checkpoint로 되돌려 BC policy 붕괴를 막는다.
-                    policy.load_state_dict(best_state["policy"])
-                    value.load_state_dict(best_state["value"])
-                if args.finetune_patience > 0:
-                    patience_left -= 1
             if progress_bar is not None:
                 progress_bar.set_postfix(
                     {
@@ -879,13 +552,8 @@ def main() -> None:
                 f"train={stats.reward:8.2f} actor_loss={stats.actor_loss:7.3f} "
                 f"critic_loss={stats.critic_loss:7.3f}"
             )
-            if args.finetune_patience > 0 and patience_left <= 0:
-                print(f"fine-tuning early stop: best_episode={best_episode}, best_reward={best_reward:.2f}")
-                break
-
     final_mean, final_rewards = evaluate(policy, eval_episodes, args, device, args.seed)
     if not history or abs(float(history[-1]["eval_reward"]) - final_mean) > 1e-9:
-        # rollback을 사용하면 마지막 주기 평가값과 실제 final policy 평가값이 다를 수 있다.
         history.append({"episode": episode, "eval_reward": final_mean, "stage": "final"})
     torch.save({"policy": policy.state_dict(), "value": value.state_dict()}, out_dir / "actor_critic_final.pt")
     np.save(out_dir / "history.npy", np.asarray(history, dtype=object))

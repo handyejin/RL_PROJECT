@@ -1,3 +1,9 @@
+####################
+# 작성자 : 박제영
+# 설명   : 우리 실험 runner가 공유하는 기본 경로, 하이퍼파라미터, 실행 명령 생성 유틸.
+#          알고리즘 구현과 실행 옵션을 분리해 코드 중복과 설정 불일치를 줄인다.
+####################
+
 """우리 실험 실행기에 공통으로 쓰는 경로, 기본값, 명령 생성 유틸.
 
 이 파일은 알고리즘 자체를 구현하지 않는다. 목적은 `run_interactive.py`와
@@ -43,10 +49,10 @@ DISTRICTS = [
     "중랑구",
 ]
 
-# 최종 chronological split의 A2C 결과 기준 Best/Worst 3개 구.
+# 최종 73일 chronological split의 A2C 결과 기준 Best/Worst 3개 구.
 # Top-K, VAE, episode 수 ablation을 전체 25개 구 대신 빠르게 비교할 때 사용한다.
-A2C_BEST3_DISTRICTS = ["마포구", "영등포구", "노원구"]
-A2C_WORST3_DISTRICTS = ["은평구", "서대문구", "관악구"]
+A2C_BEST3_DISTRICTS = ["노원구", "송파구", "영등포구"]
+A2C_WORST3_DISTRICTS = ["성북구", "서대문구", "관악구"]
 
 ALGORITHM_MODULES = {
     "reinforce": "src.agents.ours.algorithms.reinforce.core",
@@ -70,9 +76,8 @@ DEFAULT_RUNNER_VALUES: dict[str, Any] = {
     "eval_every": 50,
     "eval_every_timesteps": 20_000,
     "n_train_dates": 200,
-    "split_mode": "random",
+    "split_mode": "chronological",
     "seed": 42,
-    "bc_epochs": 0,
     "future_mode": "forecast_projected_travel",
     "future_horizon": 6,
     "vae_mode": "none",
@@ -198,8 +203,6 @@ def build_training_command(args: Any, district: str) -> list[str]:
         str(args.n_train_dates),
         "--seed",
         str(args.seed),
-        "--bc-epochs",
-        str(args.bc_epochs),
         "--future-mode",
         args.future_mode,
         "--future-horizon",
@@ -295,8 +298,6 @@ def build_training_command(args: Any, district: str) -> list[str]:
             str(args.bandit_reward_scale),
         ]
 
-    if args.algorithm == "a2c":
-        cmd += ["--bc-val-dates", "0"]
     if args.progress:
         cmd.append("--progress")
     return cmd

@@ -1,3 +1,9 @@
+####################
+# 작성자 : 박제영
+# 설명   : Contextual Bandit(LinUCB) 기반 따릉이 재배치 보조 실험 agent.
+#          장기 return 대신 현재 상태와 후보 action feature로 즉시 보상 선택을 학습한다.
+####################
+
 """Contextual Bandit 기반 따릉이 재배치 agent.
 
 알고리즘:
@@ -189,8 +195,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--split-mode",
         choices=["random", "chronological"],
-        default="random",
-        help="random: seed=42 셔플 후 80/20, chronological: 시간순 80/20 (계절 OOD 평가)",
+        default="chronological",
+        help="chronological: 시간순 80/20 holdout, random: seed=42 셔플 후 80/20.",
     )
     parser.add_argument("--eval-every", type=int, default=20_000)
     parser.add_argument("--progress", action="store_true")
@@ -199,7 +205,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bandit-alpha", type=float, default=0.5)
     parser.add_argument("--bandit-l2", type=float, default=1.0)
     parser.add_argument("--bandit-reward-scale", type=float, default=0.01)
-    parser.add_argument("--bc-epochs", type=int, default=0, help="runner 호환용. bandit에서는 사용하지 않는다.")
     parser.add_argument(
         "--future-mode",
         choices=[
@@ -235,8 +240,6 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """데이터 로드, LinUCB 온라인 학습, Best/Final 평가를 실행한다."""
     args = parse_args()
-    if args.bc_epochs:
-        print("Contextual Bandit은 BC를 사용하지 않으므로 --bc-epochs 값은 무시합니다.")
 
     train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
     print(

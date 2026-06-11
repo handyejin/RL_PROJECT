@@ -1,11 +1,19 @@
-"""REINFORCE/A2C 담당 실험만 실행하는 전용 interactive runner.
+####################
+# 작성자 : 박제영
+# 설명   : REINFORCE/A2C 담당 실험과 PPO 검산 실험을 단계별로 실행하는 interactive runner.
+#          73일 holdout, Top-K ablation, seed validation, VAE/Bandit 비교를 재현한다.
+####################
+
+"""REINFORCE/A2C 담당 실험과 PPO 검산 실험을 실행하는 interactive runner.
 
 이 파일은 발표/보고서에서 사용한 담당 알고리즘을 팀원 공용 runner와 분리해서
-실행하기 위한 얇은 진입점이다. 실제 학습 코드는 각 알고리즘 core에 있고, 이
-파일은 터미널 선택값을 명령어로 바꿔 호출한다.
+실행하기 위한 얇은 진입점이다. PPO는 팀원 담당 알고리즘이지만, 같은
+chronological split / forecast state / Top-K 조건으로 검산할 수 있게 선택
+항목으로 제공한다. 실제 학습 코드는 각 알고리즘 core에 있고, 이 파일은
+터미널 선택값을 명령어로 바꿔 호출한다.
 
 지원 작업:
-    1. 단일 학습 실행: REINFORCE, A2C, Contextual Bandit
+    1. 단일 학습 실행: REINFORCE, A2C, PPO, Contextual Bandit
     2. VAE demand latent 파일 생성
     3. 73일 최종 프로토콜: 전체 실험, Top-K, seed, final run
     4. VAE ablation: 같은 조건에서 VAE feature만 추가 비교
@@ -39,13 +47,13 @@ from src.agents.ours.common.runner_config import (
 )
 
 
-LOG_PREFIX = {"a2c": "actor_critic", "reinforce": "reinforce"}
+LOG_PREFIX = {"a2c": "actor_critic", "reinforce": "reinforce", "ppo": "ppo"}
 
 
 def choose_mode() -> str:
     """담당 실험에서 실행할 작업 종류를 선택한다."""
     print("\nREINFORCE/A2C 실험 실행 메뉴")
-    print("  1. 단일 학습 실행 (REINFORCE / A2C / Contextual Bandit)")
+    print("  1. 단일 학습 실행 (REINFORCE / A2C / PPO 검산 / Contextual Bandit)")
     print("  2. VAE latent 파일 생성")
     print("  3. Final 73-day Protocol (전체 -> Top-K -> Seed -> 최종)")
     print("  4. VAE Ablation (Best/Worst 구, VAE 추가 효과 확인)")
@@ -62,17 +70,34 @@ def choose_mode() -> str:
 
 
 def choose_algorithm() -> str:
-    """담당 알고리즘 중 하나를 선택한다."""
+    """담당 알고리즘 또는 PPO 검산 알고리즘 중 하나를 선택한다."""
     print("\n알고리즘을 선택하세요.")
     print("  1. REINFORCE")
     print("  2. A2C")
-    print("  3. Contextual Bandit (LinUCB)")
-    choice = input("선택 [1/2/3, Enter=2]: ").strip()
+    print("  3. PPO (A2C와 같은 조건으로 검산)")
+    print("  4. Contextual Bandit (LinUCB)")
+    choice = input("선택 [1/2/3/4, Enter=2]: ").strip()
     if choice == "1":
         return "reinforce"
     if choice == "3":
+        return "ppo"
+    if choice == "4":
         return "bandit"
     return "a2c"
+
+
+def choose_protocol_algorithms() -> list[str]:
+    """Final protocol에서 실행할 알고리즘 묶음을 선택한다."""
+    print("\nFinal 73-day Protocol 알고리즘을 선택하세요.")
+    print("  1. REINFORCE + A2C (기본 보고서 기준)")
+    print("  2. PPO만 (팀원 PPO 검산)")
+    print("  3. REINFORCE + A2C + PPO")
+    choice = input("선택 [1/2/3, Enter=1]: ").strip()
+    if choice == "2":
+        return ["ppo"]
+    if choice == "3":
+        return ["reinforce", "a2c", "ppo"]
+    return ["reinforce", "a2c"]
 
 
 def choose_district() -> str:
@@ -82,8 +107,8 @@ def choose_district() -> str:
     print("  2. 영등포구")
     print("  3. 마포구")
     print("  4. 관악구")
-    print("  5. A2C Best 3구 (마포구, 영등포구, 노원구)")
-    print("  6. A2C Worst 3구 (은평구, 서대문구, 관악구)")
+    print("  5. A2C Best 3구 (노원구, 송파구, 영등포구)")
+    print("  6. A2C Worst 3구 (성북구, 서대문구, 관악구)")
     print("  7. A2C Best/Worst 6구")
     print("  8. 직접 입력")
     choice = input("선택 [1/2/3/4/5/6/7/8, Enter=1]: ").strip()
@@ -175,7 +200,7 @@ def parse_args() -> argparse.Namespace:
         ],
         default="",
     )
-    parser.add_argument("--algorithm", choices=["reinforce", "a2c", "bandit"], default="")
+    parser.add_argument("--algorithm", choices=["reinforce", "a2c", "ppo", "bandit"], default="")
     parser.add_argument("--district", default="")
     parser.add_argument("--processed-dir", default=DEFAULT_RUNNER_VALUES["processed_dir"])
     parser.add_argument("--forecast-dir", default=DEFAULT_RUNNER_VALUES["forecast_dir"])
@@ -212,6 +237,11 @@ def parse_args() -> argparse.Namespace:
         help="Final 73-day Protocol 단계.",
     )
     parser.add_argument(
+        "--protocol-algorithms",
+        default="",
+        help="Final 73-day Protocol 대상 알고리즘. 예: reinforce,a2c 또는 ppo",
+    )
+    parser.add_argument(
         "--final73-source-tag",
         default="final_73d_topk12",
         help="Best/Worst를 뽑을 기준 full-run tag.",
@@ -228,7 +258,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--use-existing-seed42", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--bc-epochs", type=int, default=0)
     parser.add_argument("--future-mode", default=DEFAULT_RUNNER_VALUES["future_mode"])
     parser.add_argument("--future-horizon", type=int, default=DEFAULT_RUNNER_VALUES["future_horizon"])
     parser.add_argument("--vae-mode", choices=["none", "demand_latent"], default="")
@@ -247,6 +276,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bandit-alpha", type=float, default=DEFAULT_RUNNER_VALUES["bandit_alpha"])
     parser.add_argument("--bandit-l2", type=float, default=DEFAULT_RUNNER_VALUES["bandit_l2"])
     parser.add_argument("--bandit-reward-scale", type=float, default=DEFAULT_RUNNER_VALUES["bandit_reward_scale"])
+    parser.add_argument("--ppo-learning-rate", type=float, default=DEFAULT_RUNNER_VALUES["ppo_learning_rate"])
+    parser.add_argument("--ppo-ent-coef", type=float, default=DEFAULT_RUNNER_VALUES["ppo_ent_coef"])
+    parser.add_argument("--ppo-target-kl", type=float, default=DEFAULT_RUNNER_VALUES["ppo_target_kl"])
+    parser.add_argument("--ppo-clip-range", type=float, default=DEFAULT_RUNNER_VALUES["ppo_clip_range"])
+    parser.add_argument("--ppo-n-epochs", type=int, default=DEFAULT_RUNNER_VALUES["ppo_n_epochs"])
+    parser.add_argument("--ppo-n-steps", type=int, default=DEFAULT_RUNNER_VALUES["ppo_n_steps"])
+    parser.add_argument("--ppo-batch-size", type=int, default=DEFAULT_RUNNER_VALUES["ppo_batch_size"])
     parser.add_argument("--tag", default=DEFAULT_RUNNER_VALUES["tag"])
     parser.add_argument("--device", choices=["auto", "cpu", "mps"], default=DEFAULT_RUNNER_VALUES["device"])
     parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=DEFAULT_RUNNER_VALUES["progress"])
@@ -279,7 +315,14 @@ def run_training(args: argparse.Namespace, should_prompt: bool) -> None:
     districts = selected_districts(args.district)
     print(f"\n실행 알고리즘: {args.algorithm.upper()}", flush=True)
     print(f"실행 지역: {', '.join(districts)}", flush=True)
-    print(f"seed={args.seed}, split={args.split_mode}, episodes={args.episodes}, eval_every={args.eval_every}", flush=True)
+    if args.algorithm in {"ppo", "bandit"}:
+        print(
+            f"seed={args.seed}, split={args.split_mode}, "
+            f"timesteps={args.total_timesteps}, eval_every={args.eval_every_timesteps}",
+            flush=True,
+        )
+    else:
+        print(f"seed={args.seed}, split={args.split_mode}, episodes={args.episodes}, eval_every={args.eval_every}", flush=True)
     print(f"top_k={args.candidate_top_k}, VAE={'사용' if args.vae_mode != 'none' else '미사용'}", flush=True)
 
     for index, district in enumerate(districts, start=1):
@@ -337,6 +380,10 @@ def run_seed_sensitivity(args: argparse.Namespace) -> None:
         str(args.episodes),
         "--eval-every",
         str(args.eval_every),
+        "--total-timesteps",
+        str(args.total_timesteps),
+        "--eval-every-timesteps",
+        str(args.eval_every_timesteps),
         "--n-train-dates",
         str(args.n_train_dates),
         "--candidate-top-k",
@@ -349,6 +396,20 @@ def run_seed_sensitivity(args: argparse.Namespace) -> None:
         str(args.base_seed),
         "--additional-seeds",
         args.additional_seeds,
+        "--ppo-learning-rate",
+        str(DEFAULT_RUNNER_VALUES["ppo_learning_rate"]),
+        "--ppo-ent-coef",
+        str(DEFAULT_RUNNER_VALUES["ppo_ent_coef"]),
+        "--ppo-target-kl",
+        str(DEFAULT_RUNNER_VALUES["ppo_target_kl"]),
+        "--ppo-clip-range",
+        str(DEFAULT_RUNNER_VALUES["ppo_clip_range"]),
+        "--ppo-n-epochs",
+        str(DEFAULT_RUNNER_VALUES["ppo_n_epochs"]),
+        "--ppo-n-steps",
+        str(DEFAULT_RUNNER_VALUES["ppo_n_steps"]),
+        "--ppo-batch-size",
+        str(DEFAULT_RUNNER_VALUES["ppo_batch_size"]),
     ]
     if seed_algorithms:
         cmd.extend(["--algorithms", seed_algorithms])
@@ -398,7 +459,14 @@ def run_topk_ablation(args: argparse.Namespace, should_prompt: bool) -> None:
     print(f"알고리즘: {args.algorithm.upper()}", flush=True)
     print(f"대상 구: {', '.join(districts)}", flush=True)
     print(f"Top-K 목록: {', '.join(map(str, top_ks))}", flush=True)
-    print(f"seed={args.seed}, split={args.split_mode}, episodes={args.episodes}, eval_every={args.eval_every}", flush=True)
+    if args.algorithm in {"ppo", "bandit"}:
+        print(
+            f"seed={args.seed}, split={args.split_mode}, "
+            f"timesteps={args.total_timesteps}, eval_every={args.eval_every_timesteps}",
+            flush=True,
+        )
+    else:
+        print(f"seed={args.seed}, split={args.split_mode}, episodes={args.episodes}, eval_every={args.eval_every}", flush=True)
     print(f"VAE={'사용' if args.vae_mode != 'none' else '미사용'}", flush=True)
 
     total = len(top_ks) * len(districts)
@@ -501,11 +569,27 @@ def _final73_topks(args: argparse.Namespace, field: str, fallback: list[int]) ->
     return _parse_top_k_list(text, fallback=fallback)
 
 
+def _final73_algorithms(args: argparse.Namespace) -> list[str]:
+    """Final 73-day protocol 대상 알고리즘 목록을 반환한다."""
+    if args.protocol_algorithms:
+        algorithms = [part.strip() for part in args.protocol_algorithms.split(",") if part.strip()]
+    elif sys.stdin.isatty():
+        algorithms = choose_protocol_algorithms()
+    else:
+        algorithms = ["reinforce", "a2c"]
+
+    valid = {"reinforce", "a2c", "ppo"}
+    invalid = [algorithm for algorithm in algorithms if algorithm not in valid]
+    if invalid:
+        raise ValueError(f"지원하지 않는 protocol 알고리즘: {', '.join(invalid)}")
+    return algorithms
+
+
 def run_final73_protocol(args: argparse.Namespace) -> None:
     """73일 holdout 기준 최종 실험 프로토콜을 단계별로 실행한다.
 
     단계:
-        1. REINFORCE/A2C 전체 25개 구 baseline 재학습
+        1. 선택 알고리즘 전체 25개 구 baseline 재학습
         2. 73일 결과에서 Best/Worst 구 자동 선정 후 Top-K ablation
         3. 유망 Top-K confirmation
         4. 선택 Top-K seed validation
@@ -520,22 +604,24 @@ def run_final73_protocol(args: argparse.Namespace) -> None:
     print("\n실행 작업: Final 73-day Protocol", flush=True)
     print("평가 기준: chronological holdout 전체 2025-10-20~2025-12-31 (73일)", flush=True)
     print(f"stage={args.final73_stage}", flush=True)
+    algorithms = _final73_algorithms(args)
+    print(f"대상 알고리즘: {', '.join(a.upper() for a in algorithms)}", flush=True)
 
     if args.final73_stage == "baseline":
-        print("\n[1단계] REINFORCE/A2C 전체 25개 구 baseline 재학습", flush=True)
-        for algorithm in ["reinforce", "a2c"]:
+        print("\n[1단계] 선택 알고리즘 전체 25개 구 baseline 재학습", flush=True)
+        for algorithm in algorithms:
             run_args = argparse.Namespace(**vars(args))
             run_args.algorithm = algorithm
             run_args.district = "ALL"
             run_args.candidate_top_k = 12
             run_args.seed = args.base_seed
-            run_args.episodes = 500
-            run_args.eval_every = 50
+            if algorithm in {"reinforce", "a2c"}:
+                run_args.episodes = 500
+                run_args.eval_every = 50
             run_args.tag = args.final73_source_tag
             run_training(run_args, should_prompt=False)
         return
 
-    algorithms = ["reinforce", "a2c"]
     districts = infer_best_worst_districts(args, algorithms, args.final73_source_tag)
     if not districts:
         print("\nBest/Worst 구를 계산할 수 없습니다. 먼저 1단계 baseline full run을 완료하세요.", flush=True)
@@ -550,8 +636,9 @@ def run_final73_protocol(args: argparse.Namespace) -> None:
             run_args.district = district_group
             run_args.ablation_district_group = district_group
             run_args.ablation_top_ks = args.final73_top_ks
-            run_args.episodes = 200
-            run_args.eval_every = 20
+            if algorithm in {"reinforce", "a2c"}:
+                run_args.episodes = 200
+                run_args.eval_every = 20
             run_args.seed = args.base_seed
             run_args.tag = "final73_topk_ablation"
             run_topk_ablation(run_args, should_prompt=False)
@@ -566,8 +653,9 @@ def run_final73_protocol(args: argparse.Namespace) -> None:
             run_args.district = district_group
             run_args.ablation_district_group = district_group
             run_args.ablation_top_ks = ",".join(map(str, top_ks))
-            run_args.episodes = 500
-            run_args.eval_every = 50
+            if algorithm in {"reinforce", "a2c"}:
+                run_args.episodes = 500
+                run_args.eval_every = 50
             run_args.seed = args.base_seed
             run_args.tag = "final73_confirm"
             run_topk_ablation(run_args, should_prompt=False)
@@ -583,7 +671,7 @@ def run_final73_protocol(args: argparse.Namespace) -> None:
         seed_args.eval_every = 50
         seed_args.use_existing_seed42 = False
         seed_args.additional_seeds = args.additional_seeds
-        seed_args.seed_algorithms = "reinforce,a2c"
+        seed_args.seed_algorithms = ",".join(algorithms)
         seed_args.seed_districts = district_group
         seed_args.seed_experiment_label = f"final73_seedci"
         seed_args.recompute_seed_baseline = True
@@ -592,15 +680,16 @@ def run_final73_protocol(args: argparse.Namespace) -> None:
 
     top_ks = _final73_topks(args, "final73_confirm_top_ks", fallback=[12])
     chosen_top_k = top_ks[0]
-    print(f"\n[5단계] 최종 전체 재학습: REINFORCE/A2C, ALL, Top-K={chosen_top_k}", flush=True)
+    print(f"\n[5단계] 최종 전체 재학습: {', '.join(a.upper() for a in algorithms)}, ALL, Top-K={chosen_top_k}", flush=True)
     for algorithm in algorithms:
         run_args = argparse.Namespace(**vars(args))
         run_args.algorithm = algorithm
         run_args.district = "ALL"
         run_args.candidate_top_k = chosen_top_k
         run_args.seed = args.base_seed
-        run_args.episodes = 500
-        run_args.eval_every = 50
+        if algorithm in {"reinforce", "a2c"}:
+            run_args.episodes = 500
+            run_args.eval_every = 50
         run_args.tag = f"final73_topk{chosen_top_k}"
         run_training(run_args, should_prompt=False)
 
