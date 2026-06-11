@@ -30,7 +30,7 @@ from torch.utils.data import DataLoader, TensorDataset
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.agents.ppo import MaskablePPO  # noqa: E402
+from src.agents.models.ppo import MaskablePPO  # noqa: E402
 from src.envs.data_loader import load_episode  # noqa: E402
 from src.envs.rebalance_env import RebalanceEnv  # noqa: E402
 from scripts.train import TRAIN_DATES, _load_yaml, _get  # noqa: E402

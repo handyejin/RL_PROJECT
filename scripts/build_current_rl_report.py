@@ -23,7 +23,7 @@ from matplotlib.patches import Polygon
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.agents.ours.algorithms.reinforce.core import EVAL_DATES
+from src.agents.common.experiment_utils import EVAL_DATES
 DISTRICTS = [
     "강남구",
     "강동구",
@@ -1351,7 +1351,7 @@ VAE 실험의 의미는 "모든 구에서 성능이 좋아졌다"가 아니라, 
 ## Appendix C. 재현용 주요 실행 설정
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive
 ```
 
 interactive runner에서 알고리즘과 구를 선택하면 다음 공통 설정이 적용된다.
@@ -1369,7 +1369,7 @@ interactive runner에서 알고리즘과 구를 선택하면 다음 공통 설�
 VAE latent feature 생성은 별도 선행 단계다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive
 # 메뉴에서 VAE latent 생성 선택 후 구 또는 ALL 선택
 ```
 
@@ -1970,7 +1970,7 @@ b_a <- b_a + reward * x_a
     doc.add_heading("Appendix B. 재현용 주요 실행 설정", level=1)
     add_code_block(
         """
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive
 
 processed_dir = data/processed_seoul_all
 forecast_dir = data/forecast_by_gu

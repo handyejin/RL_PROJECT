@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.agents.ours.common.runner_config import DEFAULT_RUNNER_VALUES
+from src.agents.common.runner_config import DEFAULT_RUNNER_VALUES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,19 +38,19 @@ DEFAULT_BASE_SEED = 42
 DEFAULT_ADDITIONAL_SEEDS = [123, 777]
 EXPERIMENTS = {
     "a2c": {
-        "module": "src.agents.ours.algorithms.a2c.core",
+        "module": "src.agents.algorithms.a2c.core",
         "log_prefix": "actor_critic",
         "best": ["강서구", "강남구", "노원구"],
         "worst": ["관악구", "은평구", "서대문구"],
     },
     "reinforce": {
-        "module": "src.agents.ours.algorithms.reinforce.core",
+        "module": "src.agents.algorithms.reinforce.core",
         "log_prefix": "reinforce",
         "best": ["양천구", "강남구", "광진구"],
         "worst": ["강서구", "마포구", "강동구"],
     },
     "ppo": {
-        "module": "src.agents.ours.algorithms.ppo.core",
+        "module": "src.agents.algorithms.ppo.core",
         "log_prefix": "ppo",
         "best": ["강남구", "강동구", "동대문구"],
         "worst": ["구로구", "양천구", "광진구"],
@@ -283,9 +283,9 @@ def load_baseline_by_district() -> dict[str, float]:
 
 def compute_baseline_by_district(districts: list[str], args: argparse.Namespace) -> dict[str, float]:
     """현재 split 기준 holdout 전체에서 MostImbalanced baseline을 다시 계산한다."""
-    from src.agents.ours.algorithms.a2c.core import evaluate_heuristic, load_episodes
-    from src.agents.ours.common.data_overrides import apply_capacity_override, attach_forecast_override
-    from src.agents.ours.common.date_split import compute_split
+    from src.agents.algorithms.a2c.core import evaluate_heuristic, load_episodes
+    from src.agents.common.data_overrides import apply_capacity_override, attach_forecast_override
+    from src.agents.common.date_split import compute_split
 
     _, eval_dates = compute_split(args.split_mode, seed=args.base_seed)
     out: dict[str, float] = {}

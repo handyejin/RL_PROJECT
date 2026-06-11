@@ -26,13 +26,13 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.agents.baselines import get_policy  # noqa: E402
-from src.agents.masked_dqn import MaskableDQN  # noqa: E402
-from src.agents.ours.common.data_overrides import (  # noqa: E402
+from src.agents.common.baselines import get_policy  # noqa: E402
+from src.agents.models.masked_dqn import MaskableDQN  # noqa: E402
+from src.agents.common.data_overrides import (  # noqa: E402
     apply_capacity_override,
     attach_forecast_override,
 )
-from src.agents.ours.common import dqn_small_core as core  # noqa: E402
+from src.agents.algorithms.dqn_small import core as core  # noqa: E402
 
 
 METRIC_KEYS = ["cum_stockout", "cum_full", "cum_travel_km", "cum_travel_steps"]
@@ -81,6 +81,8 @@ def main() -> None:
     parser.add_argument("--station-ids", nargs="*", default=None,
                         help="학습 때 출력된 '선택 정류소 id' 그대로 주면 선택 재계산 생략(정확·고속).")
     parser.add_argument("--max-stations", type=int, default=15)
+    parser.add_argument("--split-mode", default="",
+                        help="학습과 동일 분할 재현(예: chronological). 비우면 모듈 기본 80/20.")
     parser.add_argument("--n-trucks", type=int, default=1)
     parser.add_argument("--demand-noise", choices=["none", "poisson"], default="none")
     parser.add_argument("--demand-rate-scale", type=float, default=1.0)
@@ -96,7 +98,17 @@ def main() -> None:
 
     env_kw = core.build_env_kw(args)
 
-    eval_episodes = core.load_episodes(core.EVAL_DATES, args.district, args.processed_dir)
+    # 학습과 동일한 날짜 분할을 재현한다. --split-mode 가 주어지면 compute_split 으로
+    # train pool / eval(73일)을 학습과 똑같이 잡는다(모델이 학습한 정류소셋·평가창 일치).
+    if args.split_mode:
+        from src.agents.common.date_split import compute_split
+        train_dates, eval_dates = compute_split(args.split_mode, seed=args.seed)
+        print(f"split-mode={args.split_mode}: train pool {len(train_dates)}일, eval {len(eval_dates)}일 "
+              f"({eval_dates[0]} ~ {eval_dates[-1]})")
+    else:
+        train_dates, eval_dates = core.TRAIN_DATES, core.EVAL_DATES
+
+    eval_episodes = core.load_episodes(eval_dates, args.district, args.processed_dir)
     full_n = eval_episodes[0].n_stations
 
     if args.station_ids:
@@ -110,7 +122,7 @@ def main() -> None:
         print(f"환경 축소: {full_n} → {len(sel)} 정류소 (--station-ids 지정)")
     elif args.max_stations and 0 < args.max_stations < full_n:
         # fallback: 선택 재계산(학습과 동일 조건이어야 일치) — 200일 로딩 필요.
-        train_episodes = core.load_episodes(core.TRAIN_DATES[: args.n_train_dates], args.district, args.processed_dir)
+        train_episodes = core.load_episodes(train_dates[: args.n_train_dates], args.district, args.processed_dir)
         sel = core.select_commute_imbalance_stations(train_episodes, args.max_stations)
         eval_episodes = [core.subset_episode(ep, sel) for ep in eval_episodes]
         print(f"환경 축소: {full_n} → {len(sel)} 정류소 (선택 재계산)")

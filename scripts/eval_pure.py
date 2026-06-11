@@ -21,7 +21,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from stable_baselines3 import DQN  # noqa: E402
 
-from src.agents.baselines import get_policy  # noqa: E402
+from src.agents.common.baselines import get_policy  # noqa: E402
 from src.envs.data_loader import load_episode  # noqa: E402
 from src.envs.rebalance_env import RebalanceEnv  # noqa: E402
 
@@ -54,7 +54,7 @@ DEFAULT_MODELS = [
 
 def _load_model(algo: str, path: str, env: RebalanceEnv):
     if algo == "masked_dqn":
-        from src.agents.masked_dqn import MaskableDQN
+        from src.agents.models.masked_dqn import MaskableDQN
         return MaskableDQN.load(path, env=env)
     return DQN.load(path, env=env)
 

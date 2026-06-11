@@ -21,7 +21,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.agents.baselines import POLICY_REGISTRY, BasePolicy, get_policy  # noqa: E402
+from src.agents.common.baselines import POLICY_REGISTRY, BasePolicy, get_policy  # noqa: E402
 from src.envs.data_loader import load_episode  # noqa: E402
 from src.envs.rebalance_env import RebalanceEnv  # noqa: E402
 

@@ -556,7 +556,7 @@ VAE 실험의 의미는 "모든 구에서 성능이 좋아졌다"가 아니라, 
 ## Appendix B. 재현용 주요 실행 설정
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive
 ```
 
 interactive runner에서 알고리즘과 구를 선택하면 다음 공통 설정이 적용된다.
@@ -574,7 +574,7 @@ interactive runner에서 알고리즘과 구를 선택하면 다음 공통 설�
 VAE latent feature 생성은 별도 선행 단계다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_interactive
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_interactive
 # 메뉴에서 VAE latent 생성 선택 후 구 또는 ALL 선택
 ```
 
