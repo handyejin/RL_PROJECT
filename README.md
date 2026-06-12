@@ -16,12 +16,19 @@ REINFORCE / A2C / DQN / PPO 를 같은 환경·같은 평가 holdout 위에서 �
 | 트럭 제어 | Parameter sharing single-agent (트럭 한 대씩 결정) |
 | State | 정류소 점유율, 트럭 위치/적재/이동 잔여, 시간·캘린더·날씨 인코딩, 미래 수요 예측 |
 | Action | Top-K 후보 정류소 중 한 곳 |
-| Reward | -stockout, -full, -이동거리, -이동시간 + 선택적 셰이핑 |
+| Reward | `-1.0*stockout -0.8*full -0.008*travel_km -0.002*travel_step` |
 | 데이터 | 2025년 1~12월 따릉이 대여이력 + 정류소 마스터 + 기상 + 공휴일 |
 | 평가 | chronological 80/20 split — 마지막 73일 holdout |
 
 알고리즘 4종은 모두 동일한 `RebalanceEnv` 위에서 동작하며, `most_imbalanced`
 휴리스틱을 공통 baseline으로 비교한다.
+
+`most_imbalanced`는 현재 재고 비율이 목표 재고 비율(기본 50%)에서 가장 크게
+벗어난 정류소를 우선 방문하는 규칙 기반 정책이다. 모든 모델 성능은
+`Delta = 모델 reward - most_imbalanced reward`로 비교하며, reward는 음수 비용이므로
+0에 가까울수록 좋고 Delta가 양수면 baseline보다 좋다. 평가 시에는
+`urgent_bonus=0`, `explore_bonus=0`, `shaping_scale=0`으로 두어 보조 shaping 없이
+동일한 원본 reward 기준으로 비교한다.
 
 ---
 
@@ -35,6 +42,7 @@ rl_project/
 │       ├── reinforce_topk12.yaml
 │       ├── a2c_topk12.yaml
 │       ├── a2c_topk12_vae.yaml
+│       ├── bandit_topk12.yaml
 │       ├── dqn_topk12.yaml
 │       ├── dqn_topk3.yaml
 │       └── ppo_topk12.yaml
@@ -52,7 +60,8 @@ rl_project/
 │   │   │   ├── a2c/core.py           # 1-step TD Actor-Critic
 │   │   │   ├── dqn/core.py           # MaskableDQN (Double/Dueling)
 │   │   │   ├── dqn_small/core.py     # 25구 축소 환경 DQN
-│   │   │   └── ppo/core.py           # MaskablePPO
+│   │   │   ├── ppo/core.py           # MaskablePPO
+│   │   │   └── bandit/core.py        # Contextual Bandit (LinUCB)
 │   │   ├── models/                   # 커스텀 SB3 policy/Q 네트워크
 │   │   └── common/                   # 공통 유틸 (state 보강, BC, candidate-K 등)
 │   ├── data/                         # 전처리 / 수요예측 / VAE latent 학습
@@ -97,6 +106,17 @@ pip install -r requirements.txt
 - `data/stations_master.csv` (정류소 마스터)
 - `data/OBS_ASOS_TIM_*.csv` (서울 기상)
 
+공식 데이터 출처:
+
+- 서울 열린데이터광장 공공자전거 대여이력:
+  <https://data.seoul.go.kr/dataList/OA-15182/F/1/datasetView.do>
+- 서울 열린데이터광장 공공자전거 대여소 정보:
+  <https://data.seoul.go.kr/dataList/OA-13252/F/1/datasetView.do>
+- 서울 열린데이터광장 실시간 공공자전거 대여정보:
+  <https://data.seoul.go.kr/dataList/OA-15493/A/1/datasetView.do>
+- 기상청 ASOS 종관기상관측:
+  <https://data.kma.go.kr/data/grnd/selectAsosRltmList.do>
+
 ### 4.2 전처리
 
 ```bash
@@ -122,6 +142,18 @@ PYTHONPATH=. python scripts/train_demand_forecast.py \
 `joblib`은 수요예측 모델 파일이고, `parquet`은 RL state feature로 실제 사용되는 1시간 예측 결과다.
 25개 구 모두 만들 때는 위 명령을 구별로 반복 실행한다.
 
+수요예측 모델은 `HistGradientBoostingRegressor` 기반의 supervised model이다.
+입력 feature는 정류소 index, 요일/시간/월, 주말 여부, 과거 1시간·3시간 대여/반납량,
+학습 구간에서 계산한 정류소별·요일별·시간별 평균 수요 profile이다. 출력은
+각 정류소의 `pred_rentals_1h`, `pred_returns_1h`, `pred_net_1h`이며,
+RL agent는 이 값을 state feature와 Top-K 후보 점수에 사용한다.
+
+주의: 위 스크립트의 `--holdout-from-rl-split`은 수요예측 모델 검증용 날짜를
+분리하기 위한 옵션이다. 최종 RL 성능 평가는 학습 실행기(`run_interactive`,
+`run_from_config`)의 `--split-mode chronological`에 의해 마지막 73일 holdout으로
+결정된다. 이미 공유된 `data/forecast_by_gu/*.parquet`을 사용하는 경우에는 별도
+수요예측 재학습 없이 RL 학습을 바로 실행할 수 있다.
+
 ---
 
 ## 5. 실행 방법
@@ -146,7 +178,7 @@ PYTHONPATH=. python -m src.agents.run_interactive \
   --algorithm a2c --district ALL --candidate-top-k 12
 ```
 
-지원 알고리즘: `reinforce`, `a2c`, `dqn`, `ppo`, `bandit`.
+보고서 기준 지원 알고리즘: `reinforce`, `a2c`, `dqn`, `ppo`, `bandit`.
 
 ### 5.2 YAML config로 실행 — `run_from_config`
 
@@ -175,6 +207,16 @@ PYTHONPATH=. python -m src.agents.run_from_config \
   --district ALL \
   --candidate-top-k 9
 ```
+
+대표 설정 요약:
+
+| 알고리즘 | 학습 길이 | 주요 설정 |
+|---|---:|---|
+| REINFORCE | 500 episodes | Reward-to-Go, Value baseline, `gamma=0.99`, 최종 Top-K=9 |
+| A2C | 500 episodes | 1-step TD advantage, actor/critic network, `gamma=0.99`, 최종 Top-K=9 |
+| DQN | 170,000 timesteps | Maskable Double DQN, `reward_scale=0.01`, Top-K 비교 |
+| PPO | 170,000 timesteps | MaskablePPO, `clip_range=0.1`, `target_kl=0.03`, Top-K 비교 |
+| Bandit | 170,000 timesteps | Contextual Bandit(LinUCB), 단기 후보 선택 비교 |
 
 ---
 
