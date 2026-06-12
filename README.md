@@ -113,10 +113,14 @@ PYTHONPATH=. python scripts/run_preprocess.py \
 PYTHONPATH=. python scripts/train_demand_forecast.py \
   --processed-dir data/processed_seoul_all \
   --district 강남구 \
-  --model-out data/forecast_by_gu/demand_forecast_1h_강남구.joblib
+  --holdout-from-rl-split \
+  --model-out data/forecast_by_gu/demand_forecast_1h_강남구.joblib \
+  --forecast-out data/forecast_by_gu/demand_forecast_1h_강남구.parquet \
+  --metrics-out data/forecast_by_gu/demand_forecast_1h_강남구_metrics.json
 ```
 
-25개 구 모두 만들 때는 위 명령을 구별로 반복 실행.
+`joblib`은 수요예측 모델 파일이고, `parquet`은 RL state feature로 실제 사용되는 1시간 예측 결과다.
+25개 구 모두 만들 때는 위 명령을 구별로 반복 실행한다.
 
 ---
 
@@ -142,7 +146,7 @@ PYTHONPATH=. python -m src.agents.run_interactive \
   --algorithm a2c --district ALL --candidate-top-k 12
 ```
 
-지원 알고리즘: `reinforce`, `a2c`, `dqn`, `ppo`.
+지원 알고리즘: `reinforce`, `a2c`, `dqn`, `ppo`, `bandit`.
 
 ### 5.2 YAML config로 실행 — `run_from_config`
 
@@ -162,6 +166,16 @@ PYTHONPATH=. python -m src.agents.run_from_config \
   --config config/ours/dqn_topk12.yaml --district ALL
 ```
 
+`config/ours/*topk12.yaml`은 초기 기준선 및 비교 실험용 설정이다.
+최종 REINFORCE/A2C 보고서 결과는 sequential screening 후 `--candidate-top-k 9`로 override하여 재현한다.
+
+```bash
+PYTHONPATH=. python -m src.agents.run_from_config \
+  --config config/ours/a2c_topk12.yaml \
+  --district ALL \
+  --candidate-top-k 9
+```
+
 ---
 
 ## 6. 학습된 모델 (Pre-trained weights)
@@ -176,10 +190,11 @@ PYTHONPATH=. python -m src.agents.run_from_config \
 | PPO       | https://drive.google.com/file/d/1UV_WRSJU1JuLn3ArVknMIXKyw1Uk5-ba/view?usp=sharing           |
 
 ```bash
-unzip <algo>.zip -d logs/
+unzip <algo>.zip -d .
 ```
 
-압축 해제 후 `logs/` 아래 학습 시 사용한 디렉토리 구조가 그대로 들어가므로 `scripts/export_replay.py` / `run_from_config.py` 가 바로 모델을 찾아 쓴다.
+압축 파일 안에 이미 `logs/...` 경로가 포함되어 있으므로 프로젝트 루트에서 푼다.
+압축 해제 후 `logs/` 아래 학습 시 사용한 디렉토리 구조가 그대로 들어가므로 replay export와 평가 스크립트가 바로 모델을 찾아 쓴다.
 
 ---
 
@@ -223,6 +238,27 @@ PYTHONPATH=. python scripts/export_replay.py \
   --district 강남구 --date 2025-10-20 \
   --out docs/강남구_DQN_2025-10-20.json
 ```
+
+**REINFORCE/A2C/PPO 모델:**
+
+```bash
+PYTHONPATH=. python -m src.agents.export_replay \
+  --algorithm a2c \
+  --district 노원구 \
+  --date 2025-10-20 \
+  --checkpoint logs/actor_critic_final73_topk9_chronological_a2c_노원구/best/best_model.pt \
+  --forecast-path data/forecast_by_gu/demand_forecast_1h_노원구.parquet \
+  --candidate-top-k 9 \
+  --candidate-mode forecast_imbalance \
+  --candidate-travel-coef 0.20 \
+  --candidate-zone-mode static3 \
+  --candidate-zone-penalty 1.0 \
+  --candidate-feature-mode basic \
+  --out docs/노원구_A2C_2025-10-20.json
+```
+
+REINFORCE는 `--algorithm reinforce`와 해당 checkpoint 경로를, PPO는 `--algorithm ppo`와 PPO checkpoint 경로를 사용한다.
+최종 PPO Top-K=3 실험을 replay할 때는 `--candidate-top-k 3`으로 맞춘다.
 
 **`dqn_small` 축소 환경(top-N 정류소 + 소수 트럭)에서 학습한 모델** 은 학습 시점과 동일하게 정류소 subset·wrapper 체인을 재구성해야 하므로 별도 스크립트를 쓴다.
 
