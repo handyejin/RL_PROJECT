@@ -3,7 +3,7 @@
 서울시 공공자전거 **따릉이**의 자치구 단위 재배치 문제를 강화학습으로 푸는 프로젝트.
 N대의 트럭이 정류소를 돌며 자전거를 적재·하차하여 **대여 실패(stockout)** 와
 **반납 실패(full)** 의 24시간 누적치를 최소화하는 정책을 학습한다.
-REINFORCE / A2C / DQN / QR-DQN / PPO / Bandit 을 같은 환경·같은 평가 holdout 위에서 비교한다.
+REINFORCE / A2C / DQN / PPO 를 같은 환경·같은 평가 holdout 위에서 비교한다.
 
 ---
 
@@ -20,7 +20,7 @@ REINFORCE / A2C / DQN / QR-DQN / PPO / Bandit 을 같은 환경·같은 평가 h
 | 데이터 | 2025년 1~12월 따릉이 대여이력 + 정류소 마스터 + 기상 + 공휴일 |
 | 평가 | chronological 80/20 split — 마지막 73일 holdout |
 
-알고리즘 6종은 모두 동일한 `RebalanceEnv` 위에서 동작하며, `most_imbalanced`
+알고리즘 4종은 모두 동일한 `RebalanceEnv` 위에서 동작하며, `most_imbalanced`
 휴리스틱을 공통 baseline으로 비교한다.
 
 ---
@@ -37,8 +37,7 @@ rl_project/
 │       ├── a2c_topk12_vae.yaml
 │       ├── dqn_topk12.yaml
 │       ├── dqn_topk3.yaml
-│       ├── ppo_topk12.yaml
-│       └── bandit_topk12.yaml
+│       └── ppo_topk12.yaml
 │
 ├── src/
 │   ├── envs/
@@ -53,9 +52,7 @@ rl_project/
 │   │   │   ├── a2c/core.py           # 1-step TD Actor-Critic
 │   │   │   ├── dqn/core.py           # MaskableDQN (Double/Dueling)
 │   │   │   ├── dqn_small/core.py     # 25구 축소 환경 DQN
-│   │   │   ├── qrdqn/core.py         # Distributional DQN
-│   │   │   ├── ppo/core.py           # MaskablePPO
-│   │   │   └── bandit/core.py        # LinUCB Contextual Bandit
+│   │   │   └── ppo/core.py           # MaskablePPO
 │   │   ├── models/                   # 커스텀 SB3 policy/Q 네트워크
 │   │   └── common/                   # 공통 유틸 (state 보강, BC, candidate-K 등)
 │   ├── data/                         # 전처리 / 수요예측 / VAE latent 학습
@@ -140,17 +137,12 @@ CLI 인자로 한 번에 지정해도 된다.
 PYTHONPATH=. python -m src.agents.run_interactive \
   --algorithm dqn --district 강남구 --candidate-top-k 12
 
-# QR-DQN, n_quantiles=200, kappa=1.0
-PYTHONPATH=. python -m src.agents.run_interactive \
-  --algorithm qrdqn --district 강남구 --candidate-top-k 12 \
-  --qrdqn-n-quantiles 200 --qrdqn-kappa 1.0
-
 # 25개 구 전체 순차 실행
 PYTHONPATH=. python -m src.agents.run_interactive \
   --algorithm a2c --district ALL --candidate-top-k 12
 ```
 
-지원 알고리즘: `reinforce`, `a2c`, `dqn`, `qrdqn`, `ppo`, `bandit`.
+지원 알고리즘: `reinforce`, `a2c`, `dqn`, `ppo`.
 
 ### 5.2 YAML config로 실행 — `run_from_config`
 
