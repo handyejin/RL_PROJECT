@@ -82,7 +82,7 @@ def _eval_seeds(args, base_seed):
 ## 4. 실행 방법 (CLI)
 
 ```bash
-PYTHONPATH=. python -m src.agents.ours.common.dqn_small_core \
+PYTHONPATH=. python -m src.agents.algorithms.dqn_small.core \
   --district 마포구 --processed-dir data/processed_seoul_all \
   --forecast-path data/forecast_by_gu/demand_forecast_1h_마포구.parquet \
   --max-stations 15 --n-trucks 1 --total-timesteps 400000 \

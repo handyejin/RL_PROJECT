@@ -247,7 +247,7 @@ seed 결과는 A2C와 REINFORCE의 차이를 잘 보여준다. A2C는 seed별 Be
 ## Appendix B. 재현 명령
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_a2c_reinforce_interactive
 ```
 
 메뉴에서 `4. 최종 chronological 전체 실험 실행`을 선택하면 A2C와 REINFORCE의 서울 25개 구 실험 및 seed 반복 실험을 순차적으로 실행한다.

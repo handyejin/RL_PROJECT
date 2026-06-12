@@ -1313,7 +1313,7 @@ Contextual Bandit은 현재 step에서 가장 좋아 보이는 후보를 고르�
 ## Appendix B. 재현 명령
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_a2c_reinforce_interactive
 ```
 
 메뉴에서 `Final 73-day Protocol`을 선택하면 전체 baseline, Top-K ablation, confirmation, seed validation, final full run을 순서대로 실행할 수 있다.

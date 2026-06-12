@@ -170,7 +170,7 @@ REINFORCE와 A2C만 확인할 때는 전용 interactive runner를 사용할 수 
 보이도록 메뉴를 줄였고, Best/Worst 3구 seed 반복 실험도 메뉴에서 바로 실행할 수 있다.
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive
+PYTHONPATH=. .venv/bin/python -m src.agents.run_a2c_reinforce_interactive
 ```
 
 메뉴는 다음 세 가지다.
@@ -193,7 +193,7 @@ Best/Worst 3구: seed 123, 777 추가 학습
 명령형으로 바로 확인하려면:
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_a2c_reinforce_interactive \
   --mode seed \
   --dry-run
 ```
@@ -203,7 +203,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_rein
 최종 기준을 한 번에 순서대로 실행하려면 메뉴에서 `4`를 선택하거나 다음 명령을 사용한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_a2c_reinforce_interactive \
   --mode final
 ```
 
@@ -218,7 +218,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_rein
 chronological split 기준 seed 42 전체 학습 로그가 아직 없으면 먼저 아래 두 명령을 실행한다.
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_a2c_reinforce_interactive \
   --mode train \
   --algorithm a2c \
   --district ALL \
@@ -227,7 +227,7 @@ PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_rein
 ```
 
 ```bash
-PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.ours.run_a2c_reinforce_interactive \
+PYTHONUNBUFFERED=1 PYTHONPATH=. .venv/bin/python -m src.agents.run_a2c_reinforce_interactive \
   --mode train \
   --algorithm reinforce \
   --district ALL \
