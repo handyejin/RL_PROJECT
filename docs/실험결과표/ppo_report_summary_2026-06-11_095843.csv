@@ -1,0 +1,3 @@
+label,n,baseline_mean,best_reward_mean,final_reward_mean,best_delta_mean,best_delta_median,best_wins,final_delta_mean,final_delta_median,final_wins,best_final_gap_mean,best_final_gap_median,section
+PPO Full TopK12,25,-496.0,-493.3,-519.5,2.7,4.7,14,-23.5,-5.5,8,26.2,0.2,full
+PPO TopK3 Seed subset,6,,,,34.9,38.4,18,26.8,28.2,16,8.1,,seed
