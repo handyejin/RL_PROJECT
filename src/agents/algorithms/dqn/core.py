@@ -263,7 +263,7 @@ def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_ev
 
 
 def evaluate(model: MaskableDQN, episodes: list, args: argparse.Namespace, seed: int) -> tuple[float, list[float]]:
-    """고정 7일 평가셋에서 greedy DQN policy의 평균 reward를 계산한다."""
+    """고정 holdout 평가셋에서 greedy DQN policy의 평균 reward를 계산한다."""
     rewards = []
     for ep in episodes:
         env = make_env(ep, args, seed=seed, for_eval=True)
@@ -405,7 +405,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """MaskableDQN을 생성하고 주기적 7일 평가로 best/final 모델을 저장한다."""
+    """MaskableDQN을 생성하고 주기적 holdout 평가로 best/final 모델을 저장한다."""
     args = parse_args()
     train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
     print(

@@ -71,7 +71,7 @@ def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_ev
 
 
 def evaluate(model: MaskableQRDQN, episodes: list, args: argparse.Namespace, seed: int) -> tuple[float, list[float]]:
-    """고정 7일 평가셋에서 greedy QR-DQN policy의 평균 reward를 계산한다."""
+    """고정 holdout 평가셋에서 greedy QR-DQN policy의 평균 reward를 계산한다."""
     rewards = []
     for ep in episodes:
         env = make_env(ep, args, seed=seed, for_eval=True)
@@ -114,8 +114,8 @@ def print_eval_table(
     model_rewards: list[float],
     eval_dates: list[str],
 ) -> None:
-    """7일 평가 결과를 표로 출력한다."""
-    print(f"\n=== {label} vs 휴리스틱 (7일) ===")
+    """holdout 평가 결과를 표로 출력한다."""
+    print(f"\n=== {label} vs 휴리스틱 (holdout) ===")
     print(f"{'날짜':12}{'휴리스틱':>10}{'모델':>10}{'Δ(M-휴)':>9}")
     for date, h, r in zip(eval_dates, heuristic_rewards, model_rewards):
         print(f"{date:12}{h:>10.1f}{r:>10.1f}{r - h:>9.1f}")
@@ -200,7 +200,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """MaskableQRDQN 을 생성하고 주기적 7일 평가로 best/final 모델을 저장한다."""
+    """MaskableQRDQN 을 생성하고 주기적 holdout 평가로 best/final 모델을 저장한다."""
     args = parse_args()
     train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
     train_episodes = load_episodes(train_dates_all[: args.n_train_dates], args.district, args.processed_dir)

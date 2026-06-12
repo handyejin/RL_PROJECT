@@ -373,7 +373,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """MaskablePPO 학습 루프와 주기적 7일 평가, best/final 저장을 실행한다."""
+    """MaskablePPO 학습 루프와 주기적 holdout 평가, best/final 저장을 실행한다."""
     args = parse_args()
     train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
     print(

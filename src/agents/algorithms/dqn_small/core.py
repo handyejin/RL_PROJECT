@@ -16,7 +16,7 @@
     3) 트럭 수를 줄여(기본 1대) 신용할당을 단순화
 
     나머지(forecast state 보강, capacity override, candidate Top-K, BC,
-    Double DQN, 7일 평가)는 dqn_core와 동일한 wrapper/헬퍼를 재사용한다.
+    Double DQN, holdout 평가)는 dqn_core와 동일한 wrapper/헬퍼를 재사용한다.
 
 실행 예:
     PYTHONPATH=. python -m src.agents.algorithms.dqn_small.core \\
