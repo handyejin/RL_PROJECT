@@ -25,7 +25,9 @@ import copy
 import csv
 import random
 from pathlib import Path
+from typing import Any
 
+import gymnasium as gym
 import numpy as np
 import torch
 from sb3_contrib import MaskablePPO
@@ -45,17 +47,17 @@ from src.agents.common.vae_latent import attach_vae_latent_override, maybe_wrap_
 # KLtoBC_PPO 는 별도로 src.agents.models.ppo.MaskablePPO (vanilla SB3 PPO + predict-time mask) 를
 # 상속한다 — ppo_v4 경로에서만 사용.
 from src.agents.models.ppo_v4 import KLtoBC_PPO
-from src.envs.data_loader import load_episode
+from src.envs.data_loader import EpisodeData, load_episode
 from src.envs.rebalance_env import RebalanceEnv
 
 
 def date_range(start: str, end: str) -> list[str]:
-    """시작일부터 종료일까지 날짜 문자열 목록을 만든다."""
+    """``start`` 부터 ``end`` 까지 (양 끝 포함) 날짜를 ``YYYY-MM-DD`` 문자열 리스트로 만든다."""
     import datetime
 
     d = datetime.date.fromisoformat(start)
     end_d = datetime.date.fromisoformat(end)
-    dates = []
+    dates: list[str] = []
     while d <= end_d:
         dates.append(d.isoformat())
         d += datetime.timedelta(days=1)
@@ -65,7 +67,8 @@ def date_range(start: str, end: str) -> list[str]:
 # TRAIN_DATES / EVAL_DATES 는 main() 에서 --split-mode 에 따라 compute_split 으로 생성한다.
 
 
-ENV_KW = dict(
+# 최종 보고서 기준 RebalanceEnv 설정 (a2c/reinforce와 동일 가중치).
+ENV_KW: dict[str, Any] = dict(
     n_trucks=3,
     truck_capacity=20,
     target_fill_ratio=0.5,
@@ -87,8 +90,8 @@ def load_episodes(
     processed_dir: str = "data/processed",
     cache_dir: str | None = "data/episode_cache",
     progress_label: str | None = None,
-) -> list:
-    """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
+) -> list[EpisodeData]:
+    """날짜 목록을 RebalanceEnv용 ``EpisodeData`` 리스트로 변환한다."""
     return load_episodes_cached(
         dates,
         district,
@@ -99,8 +102,17 @@ def load_episodes(
     )
 
 
-def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_eval: bool = False):
-    """공통 환경을 만들고, 필요하면 agent-local forecast wrapper를 적용한다."""
+def make_env(
+    episodes: EpisodeData | list[EpisodeData],
+    args: argparse.Namespace,
+    seed: int | None = None,
+    for_eval: bool = False,
+) -> gym.Env:
+    """PPO 학습/평가용 환경을 만든다.
+
+    학습 시에만 agent-local reward shaping이 적용되고, 평가 환경은 원본
+    환경 reward 기준으로 비교하기 위해 shaping을 끈다.
+    """
     env = RebalanceEnv(episodes, seed=seed, **ENV_KW)
     env = maybe_wrap_future_demand(env, args)
     env = maybe_wrap_vae_latent(env, args)
@@ -109,8 +121,13 @@ def make_env(episodes, args: argparse.Namespace, seed: int | None = None, for_ev
     return maybe_wrap_candidate_actions(env, args)
 
 
-def evaluate(model: MaskablePPO, episodes: list, args: argparse.Namespace, seed: int) -> tuple[float, list[float]]:
-    """고정 holdout 평가셋에서 greedy PPO policy의 평균 reward를 계산한다."""
+def evaluate(
+    model: MaskablePPO,
+    episodes: list[EpisodeData],
+    args: argparse.Namespace,
+    seed: int,
+) -> tuple[float, list[float]]:
+    """고정 holdout 평가셋에서 greedy PPO policy의 평균/day-별 reward를 계산한다."""
     rewards = []
     for ep in episodes:
         env = make_env(ep, args, seed=seed, for_eval=True)
@@ -130,8 +147,8 @@ def evaluate(model: MaskablePPO, episodes: list, args: argparse.Namespace, seed:
     return float(np.mean(rewards)), rewards
 
 
-def evaluate_heuristic(episodes: list, seed: int) -> tuple[float, list[float]]:
-    """같은 데이터 기준에서 most_imbalanced 휴리스틱 reward를 계산한다."""
+def evaluate_heuristic(episodes: list[EpisodeData], seed: int) -> tuple[float, list[float]]:
+    """동일 데이터에서 ``most_imbalanced`` 휴리스틱 reward를 계산한다 (PPO 대조군)."""
     heuristic = get_policy("most_imbalanced")
     rewards = []
     for ep in episodes:
@@ -147,8 +164,19 @@ def evaluate_heuristic(episodes: list, seed: int) -> tuple[float, list[float]]:
     return float(np.mean(rewards)), rewards
 
 
-def pretrain_behavior_cloning(model: MaskablePPO, train_episodes: list, args: argparse.Namespace) -> dict[str, float]:
-    """teacher action을 log-probability loss로 모방해 PPO policy를 먼저 초기화한다."""
+def pretrain_behavior_cloning(
+    model: MaskablePPO,
+    train_episodes: list[EpisodeData],
+    args: argparse.Namespace,
+) -> dict[str, float]:
+    """teacher action을 negative log-likelihood loss로 모방해 PPO policy를 초기화한다.
+
+    PPO 본 학습 전에 BC만으로 policy를 어느 정도 적응시켜 두면 초기 탐색
+    구간의 분산이 줄어든다(특히 large action space + action mask 환경).
+
+    Returns:
+        ``{"bc_samples", "bc_loss", "bc_acc"}`` 형태의 진단 dict.
+    """
     states, actions, masks = collect_bc_data(train_episodes, args, make_env)
     loader = DataLoader(
         TensorDataset(torch.from_numpy(states), torch.from_numpy(actions), torch.from_numpy(masks)),
@@ -237,8 +265,8 @@ def collect_ppo_train_metrics(model: MaskablePPO) -> dict[str, float]:
     return metrics
 
 
-def save_ppo_diagnostics(out_dir: Path, history: list[dict]) -> None:
-    """history에 저장된 PPO 진단 지표를 csv로도 저장한다."""
+def save_ppo_diagnostics(out_dir: Path, history: list[dict[str, Any]]) -> None:
+    """history에 저장된 PPO 진단 지표(approx_kl, clip_fraction 등)를 csv로 추가 저장한다."""
     metric_keys = [
         "timesteps",
         "eval_reward",

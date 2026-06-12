@@ -40,11 +40,13 @@ import random
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import gymnasium as gym
 from torch.distributions import Categorical
 from tqdm.auto import tqdm
 
@@ -58,7 +60,7 @@ from src.agents.common.experiment_utils import (
 )
 from src.agents.common.future_demand import build_history_net_profile, maybe_wrap_future_demand
 from src.agents.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
-from src.envs.data_loader import load_episode
+from src.envs.data_loader import EpisodeData, load_episode
 from src.envs.rebalance_env import RebalanceEnv
 
 
@@ -66,7 +68,14 @@ from src.envs.rebalance_env import RebalanceEnv
 # 최종 보고서 기준은 chronological split(2025-10-20~2025-12-31 holdout)이다.
 
 
-ENV_KW = dict(
+# A2C 학습에서 한 transition을 표현하는 6-튜플 형식.
+#   (state, next_state, action, reward, done, mask)
+Transition = tuple[np.ndarray, np.ndarray, int, float, bool, np.ndarray]
+
+
+# 최종 보고서 기준 RebalanceEnv 생성 설정.
+# 환경 자체의 default 와 다른 보고서 기준값만 명시한다(strict_urgent_mask 등).
+ENV_KW: dict[str, Any] = dict(
     n_trucks=3,
     truck_capacity=20,
     target_fill_ratio=0.5,
@@ -151,18 +160,33 @@ class ValueNetwork(nn.Module):
 
 
 class Memory:
-    """A2C batch update에 사용할 transition memory."""
+    """A2C batch update에 사용하는 짧은 transition buffer.
+
+    DQN의 long-horizon replay와 달리 A2C는 on-policy에 가까운 짧은 window를
+    사용하므로, ``memory_size`` 가 차면 가장 오래된 transition부터 잘려나간다.
+    """
 
     def __init__(self, memory_size: int) -> None:
-        self.buffer = deque(maxlen=memory_size)
+        self.buffer: deque[Transition] = deque(maxlen=memory_size)
 
-    def add(self, experience) -> None:
+    def add(self, experience: Transition) -> None:
+        """transition 한 건을 buffer에 추가한다."""
         self.buffer.append(experience)
 
     def size(self) -> int:
+        """현재 buffer에 쌓여 있는 transition 수."""
         return len(self.buffer)
 
-    def sample(self, batch_size: int, continuous: bool = True):
+    def sample(self, batch_size: int, continuous: bool = True) -> list[Transition]:
+        """학습용 transition batch를 추출한다.
+
+        Args:
+            batch_size: 원하는 batch 크기. buffer보다 크면 buffer 크기로 줄인다.
+            continuous: True면 연속 구간(시간순)을 추출, False면 무작위 index.
+
+        Returns:
+            transition 리스트.
+        """
         if batch_size > len(self.buffer):
             batch_size = len(self.buffer)
         if continuous:
@@ -172,6 +196,7 @@ class Memory:
         return [self.buffer[i] for i in indexes]
 
     def clear(self) -> None:
+        """buffer를 비운다 (batch update 직후 호출)."""
         self.buffer.clear()
 
 
@@ -184,8 +209,24 @@ class TrainStats:
     critic_loss: float
 
 
-def make_env(ep, args: argparse.Namespace, seed: int | None = None, for_eval: bool = False):
-    """공통 환경을 만들고, 필요하면 agent-local wrapper를 적용한다."""
+def make_env(
+    ep: EpisodeData | list[EpisodeData],
+    args: argparse.Namespace,
+    seed: int | None = None,
+    for_eval: bool = False,
+) -> gym.Env:
+    """RebalanceEnv를 만들고 future-demand · VAE · Top-K wrapper를 차례로 적용한다.
+
+    Args:
+        ep: 단일 episode 또는 리스트. 리스트면 환경 내부에서 회전 사용된다.
+        args: CLI / YAML 로 합쳐진 학습 설정.
+        seed: 환경 RNG 시드.
+        for_eval: True여도 A2C는 evaluation 전용 wrapper가 따로 없어
+            현재는 동작에 영향을 주지 않는다(시그니처 호환용).
+
+    Returns:
+        wrapper가 적용된 ``gym.Env``.
+    """
     env = RebalanceEnv(ep, seed=seed, **ENV_KW)
     env = maybe_wrap_future_demand(env, args)
     env = maybe_wrap_vae_latent(env, args)
@@ -198,8 +239,16 @@ def load_episodes(
     processed_dir: str = "data/processed",
     cache_dir: str | None = "data/episode_cache",
     progress_label: str | None = None,
-) -> list:
-    """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
+) -> list[EpisodeData]:
+    """날짜 목록을 RebalanceEnv용 ``EpisodeData`` 리스트로 변환한다.
+
+    Args:
+        dates: ``YYYY-MM-DD`` 문자열 리스트.
+        district: 자치구 이름(예: ``"강남구"``).
+        processed_dir: 전처리된 데이터 루트 디렉토리.
+        cache_dir: episode 로딩 캐시 위치. ``None`` 이면 캐시를 끈다.
+        progress_label: tqdm 진행바 라벨. ``None`` 이면 진행바를 표시하지 않는다.
+    """
     return load_episodes_cached(
         dates,
         district,
@@ -215,12 +264,26 @@ def update_a2c(
     value: ValueNetwork,
     policy_optim: torch.optim.Optimizer,
     value_optim: torch.optim.Optimizer,
-    experiences: list,
+    experiences: list[Transition],
     gamma: float,
     device: torch.device,
     normalize_advantages: bool,
 ) -> tuple[float, float]:
-    """TD target과 advantage를 이용해 actor/critic을 업데이트한다."""
+    """TD target과 advantage를 사용해 actor/critic을 한 번 업데이트한다.
+
+    Args:
+        policy: 업데이트 대상 actor.
+        value: 업데이트 대상 critic.
+        policy_optim: actor optimizer.
+        value_optim: critic optimizer.
+        experiences: 학습 transition batch.
+        gamma: 미래 보상 할인율.
+        device: torch device.
+        normalize_advantages: True면 batch advantage를 mean/std로 정규화.
+
+    Returns:
+        ``(actor_loss, critic_loss)`` 스칼라 튜플.
+    """
     # batch_state: s_t, batch_next_state: s_{t+1}
     # batch_done은 terminal transition이면 1, 아니면 0이다.
     states, next_states, actions, rewards, dones, masks = zip(*experiences)
@@ -267,7 +330,7 @@ def update_a2c(
 
 
 def train_episode(
-    env,
+    env: gym.Env,
     policy: PolicyNetwork,
     value: ValueNetwork,
     policy_optim: torch.optim.Optimizer,
@@ -279,7 +342,11 @@ def train_episode(
     seed: int,
     normalize_advantages: bool,
 ) -> TrainStats:
-    """한 episode를 실행하면서 batch_size마다 A2C update를 수행한다."""
+    """한 episode를 굴리면서 ``batch_size`` step마다 A2C update를 수행한다.
+
+    매 step의 transition을 ``memory`` 에 쌓고, 가득 차면 한 번에 update→clear
+    한다. 마지막에 누적 reward와 마지막 update의 loss를 리턴한다.
+    """
     state, _ = env.reset(seed=seed)
     done = False
     total = 0.0
@@ -316,8 +383,14 @@ def train_episode(
     return TrainStats(total, actor_loss, critic_loss)
 
 
-def evaluate(policy: PolicyNetwork, episodes: list, args: argparse.Namespace, device: torch.device, seed: int) -> tuple[float, list[float]]:
-    """평가 holdout에서 greedy policy의 평균 reward를 계산한다."""
+def evaluate(
+    policy: PolicyNetwork,
+    episodes: list[EpisodeData],
+    args: argparse.Namespace,
+    device: torch.device,
+    seed: int,
+) -> tuple[float, list[float]]:
+    """평가 holdout에서 greedy policy의 평균 reward와 day-별 reward 리스트를 계산한다."""
     rewards = []
     for ep in episodes:
         env = make_env(ep, args, for_eval=True)

@@ -31,7 +31,9 @@ import argparse
 import copy
 import random
 from pathlib import Path
+from typing import Any
 
+import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -53,12 +55,12 @@ from src.envs.rebalance_env import RebalanceEnv
 
 
 def date_range(start: str, end: str) -> list[str]:
-    """시작일부터 종료일까지 날짜 문자열 목록을 만든다."""
+    """``start`` 부터 ``end`` 까지 (양 끝 포함) 날짜를 ``YYYY-MM-DD`` 문자열 리스트로 만든다."""
     import datetime
 
     d = datetime.date.fromisoformat(start)
     end_d = datetime.date.fromisoformat(end)
-    dates = []
+    dates: list[str] = []
     while d <= end_d:
         dates.append(d.isoformat())
         d += datetime.timedelta(days=1)
@@ -75,7 +77,7 @@ EVAL_DATES = sorted(ALL_DATES[N_TRAIN:])  # eval pool 전체(73일)
 
 
 # 트럭 수 외 나머지 env 설정은 dqn_core ENV_KW와 동일하게 유지한다.
-BASE_ENV_KW = dict(
+BASE_ENV_KW: dict[str, Any] = dict(
     truck_capacity=20,
     target_fill_ratio=0.5,
     urgent_low_ratio=0.15,
@@ -94,13 +96,18 @@ MORNING_WINDOW = slice(42, 60)
 EVENING_WINDOW = slice(102, 126)
 
 
-def build_env_kw(args: argparse.Namespace) -> dict:
-    """트럭 수만 args로 덮어쓴 env 설정을 만든다."""
+def build_env_kw(args: argparse.Namespace) -> dict[str, Any]:
+    """``BASE_ENV_KW`` 에서 트럭 수만 args로 덮어쓴 env 설정 사본을 만든다."""
     return dict(BASE_ENV_KW, n_trucks=args.n_trucks)
 
 
-def build_raw_env(episodes, args: argparse.Namespace, env_kw: dict, seed: int | None):
-    """demand-noise 설정에 따라 결정적/확률 RebalanceEnv를 만든다."""
+def build_raw_env(
+    episodes: EpisodeData | list[EpisodeData],
+    args: argparse.Namespace,
+    env_kw: dict[str, Any],
+    seed: int | None,
+) -> gym.Env:
+    """demand-noise 옵션에 따라 결정적 또는 Poisson 확률 RebalanceEnv를 만든다."""
     if getattr(args, "demand_noise", "none") == "poisson":
         return StochasticRebalanceEnv(
             episodes, seed=seed, demand_noise="poisson",
@@ -109,11 +116,19 @@ def build_raw_env(episodes, args: argparse.Namespace, env_kw: dict, seed: int | 
     return RebalanceEnv(episodes, seed=seed, **env_kw)
 
 
-def select_commute_imbalance_stations(episodes: list, n_stations: int) -> np.ndarray:
+def select_commute_imbalance_stations(episodes: list[EpisodeData], n_stations: int) -> np.ndarray:
     """train episode 평균 수요에서 출퇴근 불균형 압력 top-N 정류소 index를 고른다.
 
-    press[i] = |반납-대여| 합 (아침 피크) + |반납-대여| 합 (저녁 피크)
-    압력이 큰 정류소일수록 재배치 가치가 크다 → sweet-spot 부분문제를 만든다.
+    압력 정의::
+
+        press[i] = Σ_{t∈morning} |returns - rentals|
+                 + Σ_{t∈evening} |returns - rentals|
+
+    압력이 큰 정류소일수록 재배치 가치가 커서, 학습 가능한 sweet-spot
+    부분문제를 만들기에 적합하다.
+
+    Returns:
+        선택된 top-N 정류소 index (원래 정류소 순서를 보존하도록 정렬).
     """
     rentals = np.stack([ep.rentals for ep in episodes]).mean(axis=0)  # (T, N)
     returns = np.stack([ep.returns for ep in episodes]).mean(axis=0)  # (T, N)
@@ -150,16 +165,26 @@ def subset_episode(ep: EpisodeData, sel: np.ndarray) -> EpisodeData:
     )
 
 
-def load_episodes(dates: list[str], district: str, processed_dir: str) -> list:
-    """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
+def load_episodes(dates: list[str], district: str, processed_dir: str) -> list[EpisodeData]:
+    """날짜 목록을 RebalanceEnv용 ``EpisodeData`` 리스트로 변환한다(캐시 사용 안 함)."""
     return [
         load_episode(processed_dir, district=district, episode_start=f"{date} 00:00")
         for date in dates
     ]
 
 
-def make_env(episodes, args: argparse.Namespace, env_kw: dict, seed: int | None = None, for_eval: bool = False):
-    """축소된 환경을 만들고 forecast/shaping/candidate wrapper를 적용한다."""
+def make_env(
+    episodes: EpisodeData | list[EpisodeData],
+    args: argparse.Namespace,
+    env_kw: dict[str, Any],
+    seed: int | None = None,
+    for_eval: bool = False,
+) -> gym.Env:
+    """축소된 환경을 만들고 forecast / VAE / reward shaping / Top-K wrapper를 적용한다.
+
+    평가용(``for_eval=True``)에서는 reward shaping을 끄고 원본 환경 reward로만
+    평가한다.
+    """
     env = build_raw_env(episodes, args, env_kw, seed)
     env = maybe_wrap_future_demand(env, args)
     env = maybe_wrap_vae_latent(env, args)
@@ -180,8 +205,18 @@ def _eval_seeds(args: argparse.Namespace, base_seed: int) -> list[int]:
     return [base_seed + i for i in range(n)]
 
 
-def evaluate(model, episodes: list, args: argparse.Namespace, env_kw: dict, seed: int) -> tuple[float, list[float]]:
-    """고정 평가셋에서 greedy DQN policy의 평균 reward를 계산한다(확률 환경은 다중 실현 평균)."""
+def evaluate(
+    model: MaskableDQN,
+    episodes: list[EpisodeData],
+    args: argparse.Namespace,
+    env_kw: dict[str, Any],
+    seed: int,
+) -> tuple[float, list[float]]:
+    """고정 평가셋에서 greedy DQN policy의 reward를 계산한다.
+
+    확률 환경(Poisson)일 때는 ``--eval-samples`` 개의 서로 다른 수요 실현을
+    돌린 뒤 day별 평균을 내고, 그 위에서 다시 전체 평균을 낸다(paired 비교).
+    """
     seeds = _eval_seeds(args, seed)
     rewards = []
     for ep in episodes:
@@ -205,8 +240,13 @@ def evaluate(model, episodes: list, args: argparse.Namespace, env_kw: dict, seed
     return float(np.mean(rewards)), rewards
 
 
-def evaluate_heuristic(episodes: list, args: argparse.Namespace, env_kw: dict, seed: int) -> tuple[float, list[float]]:
-    """같은 축소 데이터에서 most_imbalanced 휴리스틱 reward를 계산한다(model과 같은 실현 공유)."""
+def evaluate_heuristic(
+    episodes: list[EpisodeData],
+    args: argparse.Namespace,
+    env_kw: dict[str, Any],
+    seed: int,
+) -> tuple[float, list[float]]:
+    """동일한 축소 데이터에서 ``most_imbalanced`` 휴리스틱 reward를 계산한다(model과 seed 공유)."""
     heuristic = get_policy("most_imbalanced")
     seeds = _eval_seeds(args, seed)
     rewards = []
@@ -226,8 +266,17 @@ def evaluate_heuristic(episodes: list, args: argparse.Namespace, env_kw: dict, s
     return float(np.mean(rewards)), rewards
 
 
-def pretrain_behavior_cloning(model, train_episodes: list, args: argparse.Namespace, env_kw: dict) -> dict[str, float]:
-    """teacher action을 CrossEntropy로 모방해 DQN Q-network를 먼저 초기화한다."""
+def pretrain_behavior_cloning(
+    model: MaskableDQN,
+    train_episodes: list[EpisodeData],
+    args: argparse.Namespace,
+    env_kw: dict[str, Any],
+) -> dict[str, float]:
+    """teacher action을 CrossEntropy로 모방해 DQN Q-network를 먼저 초기화한다.
+
+    BC 종료 후에는 target network에도 동일한 가중치를 복사해 두어, ε-greedy
+    초반의 random exploration이 학습된 Q를 곧바로 망가뜨리지 않도록 한다.
+    """
     def _make_env(eps, a, seed=None, for_eval=False):
         return make_env(eps, a, env_kw, seed=seed, for_eval=for_eval)
 

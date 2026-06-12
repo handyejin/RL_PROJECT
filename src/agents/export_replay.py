@@ -24,16 +24,18 @@ import torch
 from torch.distributions import Categorical
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agents.algorithms.a2c import core as a2c_core  # noqa: E402
+from src.agents.algorithms.dqn import core as dqn_core  # noqa: E402
 from src.agents.algorithms.ppo import core as ppo_core  # noqa: E402
 from src.agents.algorithms.reinforce import core as reinforce_core  # noqa: E402
 from src.agents.common.candidate_actions import CandidateTopKActionWrapper  # noqa: E402
 from src.agents.common.data_overrides import apply_capacity_override, attach_forecast_override  # noqa: E402
 from src.agents.common.experiment_utils import ENV_KW  # noqa: E402
 from src.agents.common.baselines import get_policy  # noqa: E402
+from src.agents.models.masked_dqn import MaskableDQN  # noqa: E402
 from src.envs.data_loader import load_episode  # noqa: E402
 from src.envs.rebalance_env import RebalanceEnv  # noqa: E402
 
@@ -65,6 +67,11 @@ def _build_env_args(args: argparse.Namespace) -> SimpleNamespace:
         agent_shaping_mode="projected_imbalance",
         agent_shaping_scale=0.0,
         agent_shaping_gamma=0.99,
+        # dqn_core.make_env에서 사용 — eval에선 비활성.
+        vae_mode="none",
+        vae_latent_path="",
+        vae_latent_dim=0,
+        dqn_reward_scale=1.0,
     )
 
 
@@ -75,6 +82,8 @@ def _make_env(ep, args: argparse.Namespace):
         return a2c_core.make_env(ep, env_args, seed=args.seed, for_eval=True)
     if args.algorithm == "ppo":
         return ppo_core.make_env(ep, env_args, seed=args.seed, for_eval=True)
+    if args.algorithm == "dqn":
+        return dqn_core.make_env(ep, env_args, seed=args.seed, for_eval=True)
     return reinforce_core.make_env(ep, env_args, seed=args.seed, for_eval=True)
 
 
@@ -137,6 +146,25 @@ def _policy_distribution(policy, obs: np.ndarray, mask: np.ndarray, device: torc
     return action_rank, probs.astype(float), logits_np.astype(float)
 
 
+def _dqn_distribution(model, obs: np.ndarray, mask: np.ndarray) -> tuple[int, np.ndarray, np.ndarray]:
+    """MaskableDQN의 Q값을 masked softmax로 변환해 viewer용 확률 분포로 만든다."""
+    with torch.no_grad():
+        obs_t, _ = model.q_net.obs_to_tensor(obs)
+        q = model.q_net(obs_t).cpu().numpy().reshape(-1)
+    mask_bool = np.asarray(mask, dtype=bool)
+    logits = np.where(mask_bool, q.astype(np.float64), -np.inf)
+    if not np.isfinite(logits).any():
+        probs = np.full_like(q, 1.0 / max(len(q), 1), dtype=np.float64)
+        action_rank = 0
+    else:
+        shifted = logits - np.nanmax(logits[np.isfinite(logits)])
+        exp = np.where(np.isfinite(shifted), np.exp(shifted), 0.0)
+        total = exp.sum()
+        probs = exp / total if total > 0 else np.zeros_like(exp)
+        action_rank = int(np.argmax(np.where(mask_bool, q, -np.inf)))
+    return action_rank, probs.astype(float), q.astype(float)
+
+
 def _ppo_distribution(model, obs: np.ndarray, mask: np.ndarray) -> tuple[int, np.ndarray, np.ndarray]:
     """MaskablePPO policy에서 action mask가 반영된 rank별 확률을 계산한다."""
     with torch.no_grad():
@@ -160,6 +188,8 @@ def _action_distribution(
     """알고리즘별 policy 출력 형식을 replay용 확률 배열로 통일한다."""
     if algorithm == "ppo":
         return _ppo_distribution(model, obs, mask)
+    if algorithm == "dqn":
+        return _dqn_distribution(model, obs, mask)
     return _policy_distribution(model, obs, mask, device)
 
 
@@ -283,7 +313,7 @@ def _snapshot(
 def parse_args() -> argparse.Namespace:
     """CLI 옵션을 정의한다."""
     parser = argparse.ArgumentParser(description="Export ours REINFORCE/A2C/PPO replay JSON")
-    parser.add_argument("--algorithm", choices=["reinforce", "a2c", "ppo"], default="reinforce")
+    parser.add_argument("--algorithm", choices=["reinforce", "a2c", "ppo", "dqn"], default="reinforce")
     parser.add_argument("--district", default="강남구")
     parser.add_argument("--date", default="2025-03-25")
     parser.add_argument("--processed-dir", default="data/processed_seoul_all")
@@ -341,6 +371,14 @@ def main() -> None:
     print(f"[3/4] loading policy: {args.checkpoint}", flush=True)
     if args.algorithm == "ppo":
         policy = ppo_core.MaskablePPO.load(str(_project_path(args.checkpoint)), env=None, device=device)
+    elif args.algorithm == "dqn":
+        policy = MaskableDQN.load(str(_project_path(args.checkpoint)), env=None, device=device)
+        if policy.observation_space.shape != env.observation_space.shape:
+            raise ValueError(
+                f"obs shape mismatch — model {policy.observation_space.shape}, "
+                f"env {env.observation_space.shape}. "
+                f"학습 시 future-mode/future-horizon/candidate-* 옵션을 동일하게 맞춰주세요."
+            )
     else:
         policy = _load_policy(args, obs_dim, action_dim, device)
 

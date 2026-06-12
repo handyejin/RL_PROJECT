@@ -44,7 +44,12 @@ DEFAULTS: dict[str, Any] = {**DEFAULT_RUNNER_VALUES, "algorithm": "dqn", "tag": 
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
-    """YAML 파일을 읽어 dict로 반환한다."""
+    """YAML 파일을 읽어 dict로 반환한다.
+
+    Raises:
+        TypeError: root가 mapping이 아니면(예: 리스트/스칼라) 즉시 실패한다 —
+            이후 ``build_args`` 에서 조용한 KeyError로 끝나지 않도록.
+    """
     with path.open(encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
@@ -53,14 +58,26 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def _apply_section(values: dict[str, Any], section: dict[str, Any], mapping: dict[str, str]) -> None:
-    """YAML section의 key를 runner option 이름으로 옮긴다."""
+    """YAML 한 섹션의 key들을 runner option 이름으로 옮긴다.
+
+    Args:
+        values: 누적 옵션 dict (in-place 수정).
+        section: YAML 안의 하위 dict.
+        mapping: ``{yaml_key: runner_option_key}`` 매핑.
+    """
     for src_key, dest_key in mapping.items():
         if src_key in section:
             values[dest_key] = section[src_key]
 
 
 def build_args(config: dict[str, Any], cli: argparse.Namespace) -> SimpleNamespace:
-    """YAML 설정과 CLI override를 합쳐 run_interactive 호환 args를 만든다."""
+    """YAML 설정과 CLI override를 합쳐 ``run_interactive`` 호환 args namespace를 만든다.
+
+    우선순위:
+        1. ``DEFAULTS`` (fallback)
+        2. YAML 설정 값
+        3. CLI에서 명시한 override (algorithm/district/tag/device/seed/top_k 등)
+    """
     values = dict(DEFAULTS)
 
     if "algorithm" in config:

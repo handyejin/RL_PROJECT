@@ -39,7 +39,9 @@ import argparse
 import random
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn as nn
@@ -57,7 +59,7 @@ from src.agents.common.experiment_utils import (
 )
 from src.agents.common.future_demand import build_history_net_profile, maybe_wrap_future_demand
 from src.agents.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
-from src.envs.data_loader import load_episode
+from src.envs.data_loader import EpisodeData, load_episode
 from src.envs.rebalance_env import RebalanceEnv
 
 
@@ -65,7 +67,8 @@ from src.envs.rebalance_env import RebalanceEnv
 # 최종 보고서 기준은 chronological split(2025-10-20~2025-12-31 holdout)이다.
 
 
-ENV_KW = dict(
+# 최종 보고서 기준 RebalanceEnv 설정 (a2c/ppo와 동일 가중치).
+ENV_KW: dict[str, Any] = dict(
     n_trucks=3,
     truck_capacity=20,
     target_fill_ratio=0.5,
@@ -162,8 +165,13 @@ class Trajectory:
     total_reward: float
 
 
-def make_env(ep, args: argparse.Namespace, seed: int | None = None, for_eval: bool = False):
-    """공통 환경을 만들고, 필요하면 agent-local future wrapper를 적용한다."""
+def make_env(
+    ep: EpisodeData | list[EpisodeData],
+    args: argparse.Namespace,
+    seed: int | None = None,
+    for_eval: bool = False,
+) -> gym.Env:
+    """RebalanceEnv를 만들고 future-demand · VAE · Top-K wrapper를 차례로 적용한다."""
     env = RebalanceEnv(ep, seed=seed, **ENV_KW)
     env = maybe_wrap_future_demand(env, args)
     env = maybe_wrap_vae_latent(env, args)
@@ -176,8 +184,8 @@ def load_episodes(
     processed_dir: str = "data/processed",
     cache_dir: str | None = "data/episode_cache",
     progress_label: str | None = None,
-) -> list:
-    """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
+) -> list[EpisodeData]:
+    """날짜 목록을 RebalanceEnv용 ``EpisodeData`` 리스트로 변환한다."""
     return load_episodes_cached(
         dates,
         district,
@@ -189,13 +197,17 @@ def load_episodes(
 
 
 def collect_trajectory(
-    env,
+    env: gym.Env,
     policy: PolicyNetwork,
     device: torch.device,
     seed: int,
     max_num_steps: int,
 ) -> Trajectory:
-    """한 episode를 실행해 REINFORCE update에 필요한 trajectory를 수집한다."""
+    """한 episode를 끝까지(또는 ``max_num_steps`` 까지) 굴려 trajectory를 모은다.
+
+    REINFORCE는 episode가 끝나야 reward-to-go를 계산할 수 있어, 한 번에
+    full trajectory를 수집한 다음 update한다.
+    """
     state_list, action_list, reward_list, mask_list, logp_list = [], [], [], [], []
     state, _ = env.reset(seed=seed)
     done = False
@@ -221,10 +233,16 @@ def collect_trajectory(
 
 
 def calc_returns(rewards: list[float], gamma: float) -> list[float]:
-    """Reward-to-Go G_t를 계산한다."""
-    returns = []
+    """각 시점의 reward-to-go ``G_t = Σ_{k≥0} γ^k r_{t+k}`` 를 계산한다.
+
+    뒤에서 앞으로 누적하면 한 번의 pass만으로 모든 시점의 G_t가 채워진다.
+
+    Args:
+        rewards: 시간순 reward 리스트.
+        gamma: 할인율.
+    """
+    returns: list[float] = []
     running = 0.0
-    # 뒤에서 앞으로 누적하면 각 시점의 G_t를 한 번에 계산할 수 있다.
     for reward in reversed(rewards):
         running = reward + gamma * running
         returns.append(running)
@@ -277,8 +295,14 @@ def update_reinforce(
     }
 
 
-def evaluate(policy: PolicyNetwork, episodes: list, args: argparse.Namespace, device: torch.device, seed: int) -> tuple[float, list[float]]:
-    """평가 holdout에서 greedy policy의 평균 reward를 계산한다."""
+def evaluate(
+    policy: PolicyNetwork,
+    episodes: list[EpisodeData],
+    args: argparse.Namespace,
+    device: torch.device,
+    seed: int,
+) -> tuple[float, list[float]]:
+    """평가 holdout에서 greedy policy의 평균/day-별 reward를 계산한다."""
     rewards = []
     for ep in episodes:
         env = make_env(ep, args, seed=seed, for_eval=True)

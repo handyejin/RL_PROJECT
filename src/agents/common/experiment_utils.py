@@ -8,20 +8,21 @@ from __future__ import annotations
 
 import datetime
 import random
+from typing import Any
 
 import numpy as np
 
 from src.agents.common.baselines import get_policy
 from src.agents.common.episode_cache import load_episodes_cached
-from src.envs.data_loader import load_episode
+from src.envs.data_loader import EpisodeData, load_episode
 from src.envs.rebalance_env import RebalanceEnv
 
 
 def date_range(start: str, end: str) -> list[str]:
-    """시작일부터 종료일까지 날짜 문자열 목록을 만든다."""
+    """``start`` 부터 ``end`` 까지 (양 끝 포함) 날짜를 ``YYYY-MM-DD`` 문자열로 만든다."""
     d = datetime.date.fromisoformat(start)
     end_d = datetime.date.fromisoformat(end)
-    dates = []
+    dates: list[str] = []
     while d <= end_d:
         dates.append(d.isoformat())
         d += datetime.timedelta(days=1)
@@ -36,8 +37,8 @@ TRAIN_DATES = ALL_DATES[:N_TRAIN]
 EVAL_DATES = sorted(ALL_DATES[N_TRAIN:])  # eval pool 전체(73일)
 
 
-# 모든 ours agent가 같은 평가 reward를 쓰도록 환경 기본값을 한 곳에 둔다.
-ENV_KW = dict(
+# 모든 ours agent가 같은 평가 reward 기준을 공유하도록 환경 default를 한 곳에 둔다.
+ENV_KW: dict[str, Any] = dict(
     n_trucks=3,
     truck_capacity=20,
     target_fill_ratio=0.5,
@@ -59,8 +60,8 @@ def load_rebalance_episodes(
     processed_dir: str = "data/processed",
     cache_dir: str | None = "data/episode_cache",
     progress_label: str | None = None,
-) -> list:
-    """날짜 목록을 RebalanceEnv episode 데이터로 변환한다."""
+) -> list[EpisodeData]:
+    """날짜 목록을 RebalanceEnv용 ``EpisodeData`` 리스트로 변환한다 (캐시 사용)."""
     return load_episodes_cached(
         dates,
         district,
@@ -71,8 +72,8 @@ def load_rebalance_episodes(
     )
 
 
-def evaluate_most_imbalanced(episodes: list, seed: int) -> tuple[float, list[float]]:
-    """같은 데이터 기준에서 MostImbalanced baseline reward를 계산한다."""
+def evaluate_most_imbalanced(episodes: list[EpisodeData], seed: int) -> tuple[float, list[float]]:
+    """동일 데이터에서 ``MostImbalanced`` 휴리스틱 baseline reward를 계산한다 (전 알고리즘 공통 대조)."""
     heuristic = get_policy("most_imbalanced")
     rewards = []
     for ep in episodes:
@@ -94,7 +95,15 @@ def print_eval_table(
     model_rewards: list[float],
     eval_dates: list[str] | None = None,
 ) -> None:
-    """평가 결과를 baseline과 나란히 출력한다."""
+    """평가 결과를 휴리스틱 baseline과 나란히 출력한다.
+
+    Args:
+        label: 결과 헤더에 붙는 라벨 (예: ``"a2c_final"``).
+        heuristic_rewards: baseline의 day-별 reward.
+        model_rewards: 모델의 day-별 reward (길이 == heuristic_rewards).
+        eval_dates: 표에 표시할 날짜 라벨. ``None`` 이면 module-level
+            ``EVAL_DATES`` 사용.
+    """
     dates = eval_dates or EVAL_DATES
     print(f"\n=== {label} vs 휴리스틱 ({len(dates)}일) ===")
     print(f"{'날짜':12}{'휴리스틱':>10}{'모델':>10}{'Δ(M-휴)':>9}")

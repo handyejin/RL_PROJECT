@@ -58,6 +58,7 @@ ALGORITHM_MODULES = {
     "reinforce": "src.agents.algorithms.reinforce.core",
     "a2c": "src.agents.algorithms.a2c.core",
     "dqn": "src.agents.algorithms.dqn.core",
+    "qrdqn": "src.agents.algorithms.qrdqn.core",
     "ppo": "src.agents.algorithms.ppo.core",
     "bandit": "src.agents.algorithms.bandit.core",
 }
@@ -104,6 +105,10 @@ DEFAULT_RUNNER_VALUES: dict[str, Any] = {
     "dqn_exploration_initial_eps": 0.3,
     "dqn_exploration_fraction": 0.2,
     "dqn_exploration_final_eps": 0.02,
+    # QR-DQN 고유: distributional Q 분위수 개수와 quantile-Huber smoothing 폭.
+    # core 기본값(200, 1.0)을 그대로 fallback으로 사용한다.
+    "qrdqn_n_quantiles": 200,
+    "qrdqn_kappa": 1.0,
     "bandit_alpha": 0.5,
     "bandit_l2": 1.0,
     "bandit_reward_scale": 0.01,
@@ -263,6 +268,25 @@ def build_training_command(args: Any, district: str) -> list[str]:
             str(args.dqn_exploration_fraction),
             "--exploration-final-eps",
             str(args.dqn_exploration_final_eps),
+        ]
+
+    if args.algorithm == "qrdqn":
+        # QR-DQN은 distributional Q (분위수 회귀)라 reward_scale/dueling 옵션이 없다.
+        # exploration eps와 Double-Q는 DQN과 공통, n_quantiles/kappa만 추가로 노출한다.
+        cmd += [
+            "--split-mode",
+            args.split_mode,
+            "--double-q",
+            "--exploration-initial-eps",
+            str(args.dqn_exploration_initial_eps),
+            "--exploration-fraction",
+            str(args.dqn_exploration_fraction),
+            "--exploration-final-eps",
+            str(args.dqn_exploration_final_eps),
+            "--n-quantiles",
+            str(args.qrdqn_n_quantiles),
+            "--kappa",
+            str(args.qrdqn_kappa),
         ]
 
     if args.algorithm == "ppo":

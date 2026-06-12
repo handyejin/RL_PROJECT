@@ -51,8 +51,15 @@ def choose_algorithm() -> str:
     print("  3. DQN (Double DQN)")
     print("  4. PPO")
     print("  5. Contextual Bandit (LinUCB)")
-    choice = input("선택 [1/2/3/4/5, Enter=2]: ").strip()
-    return {"1": "reinforce", "3": "dqn", "4": "ppo", "5": "bandit"}.get(choice, "a2c")
+    print("  6. QR-DQN (Distributional Double DQN)")
+    choice = input("선택 [1/2/3/4/5/6, Enter=2]: ").strip()
+    return {
+        "1": "reinforce",
+        "3": "dqn",
+        "4": "ppo",
+        "5": "bandit",
+        "6": "qrdqn",
+    }.get(choice, "a2c")
 
 
 def choose_district() -> str:
@@ -109,7 +116,11 @@ def parse_args() -> argparse.Namespace:
     """대화형 실행과 명령형 실행을 모두 지원하는 옵션을 정의한다."""
     parser = argparse.ArgumentParser(description="Interactive runner for our RL experiments.")
     parser.add_argument("--task", choices=["rl", "vae"], default="")
-    parser.add_argument("--algorithm", choices=["reinforce", "a2c", "dqn", "ppo", "bandit"], default="")
+    parser.add_argument(
+        "--algorithm",
+        choices=["reinforce", "a2c", "dqn", "qrdqn", "ppo", "bandit"],
+        default="",
+    )
     parser.add_argument("--district", default="")
     parser.add_argument("--processed-dir", default=DEFAULT_RUNNER_VALUES["processed_dir"])
     parser.add_argument("--forecast-dir", default=DEFAULT_RUNNER_VALUES["forecast_dir"])
@@ -157,6 +168,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dqn-exploration-initial-eps", type=float, default=DEFAULT_RUNNER_VALUES["dqn_exploration_initial_eps"])
     parser.add_argument("--dqn-exploration-fraction", type=float, default=DEFAULT_RUNNER_VALUES["dqn_exploration_fraction"])
     parser.add_argument("--dqn-exploration-final-eps", type=float, default=DEFAULT_RUNNER_VALUES["dqn_exploration_final_eps"])
+    # QR-DQN 전용. exploration eps와 Double-Q는 위 DQN 옵션을 공유한다.
+    parser.add_argument(
+        "--qrdqn-n-quantiles",
+        type=int,
+        default=DEFAULT_RUNNER_VALUES["qrdqn_n_quantiles"],
+        help="QR-DQN 분위수 개수 (기본 200).",
+    )
+    parser.add_argument(
+        "--qrdqn-kappa",
+        type=float,
+        default=DEFAULT_RUNNER_VALUES["qrdqn_kappa"],
+        help="QR-DQN quantile-Huber loss smoothing 폭 (기본 1.0).",
+    )
     parser.add_argument("--bandit-alpha", type=float, default=DEFAULT_RUNNER_VALUES["bandit_alpha"])
     parser.add_argument("--bandit-l2", type=float, default=DEFAULT_RUNNER_VALUES["bandit_l2"])
     parser.add_argument("--bandit-reward-scale", type=float, default=DEFAULT_RUNNER_VALUES["bandit_reward_scale"])

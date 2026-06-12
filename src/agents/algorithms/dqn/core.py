@@ -58,6 +58,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.agents.common.bc_utils import collect_bc_data
 from src.agents.common.candidate_actions import maybe_wrap_candidate_actions
 from src.agents.common.data_overrides import apply_capacity_override, attach_forecast_override
+from src.agents.common.date_split import compute_split
 from src.agents.common.experiment_utils import (
     ENV_KW,
     EVAL_DATES,
@@ -391,6 +392,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidate-feature-mode", choices=["none", "basic"], default="none")
     parser.add_argument("--masked-target-q", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--device", default="auto", choices=["auto", "cpu", "mps"])
+    parser.add_argument(
+        "--split-mode",
+        choices=["random", "chronological"],
+        default="random",
+        help="chronological: 시간순 holdout, random: seed=42 셔플 후 80/20. "
+             "지정 시 experiment_utils의 고정 TRAIN/EVAL_DATES를 무시한다.",
+    )
     parser.add_argument("--progress", action="store_true")
     parser.add_argument("--progress-update-steps", type=int, default=1_000)
     return parser.parse_args()
@@ -399,15 +407,21 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """MaskableDQN을 생성하고 주기적 7일 평가로 best/final 모델을 저장한다."""
     args = parse_args()
+    train_dates_all, eval_dates = compute_split(args.split_mode, seed=42)
+    print(
+        f"[DQN:{args.district}] split={args.split_mode} "
+        f"(train_pool={len(train_dates_all)}, eval={len(eval_dates)})",
+        flush=True,
+    )
     train_episodes = load_episodes(
-        TRAIN_DATES[: args.n_train_dates],
+        train_dates_all[: args.n_train_dates],
         args.district,
         args.processed_dir,
         None if args.no_episode_cache else args.episode_cache_dir,
         f"DQN {args.district} load train" if args.progress else None,
     )
     eval_episodes = load_episodes(
-        EVAL_DATES,
+        eval_dates,
         args.district,
         args.processed_dir,
         None if args.no_episode_cache else args.episode_cache_dir,

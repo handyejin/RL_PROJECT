@@ -33,17 +33,77 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TruckState:
-    location: int          # 현재(idle) 또는 출발 정류소 idx
-    destination: int       # 목적지 정류소 idx (idle이면 location과 동일)
-    load: int              # 적재 자전거 수
-    remaining_steps: int   # 도착까지 남은 step (0이면 idle)
+    """재배치 트럭 한 대의 시점-t 상태.
+
+    Attributes:
+        location: 현재(idle 일 때) 또는 출발 정류소 index.
+        destination: 목적지 정류소 index. idle이면 ``location`` 과 동일.
+        load: 트럭 적재함에 실린 자전거 수.
+        remaining_steps: 목적지 도착까지 남은 환경 step 수.
+            0이면 idle 상태이며, 이 시점에 새 결정을 받을 수 있다.
+    """
+
+    location: int
+    destination: int
+    load: int
+    remaining_steps: int
 
     @property
     def is_idle(self) -> bool:
+        """이동 중이 아닌(=결정 가능한) 상태인지 여부."""
         return self.remaining_steps == 0
 
 
 class RebalanceEnv(gym.Env):
+    """따릉이 정류소 재배치 시뮬레이터.
+
+    Parameter-sharing single-agent 구조:
+      * 1 RL step = idle 트럭 한 대의 1회 결정 (다음 갈 정류소 선택).
+      * 모든 트럭이 이동 중이면 환경이 시계만 진행하며 demand replay·도착을
+        처리하다가, idle 트럭이 다시 생기는 순간 다음 결정 시점이 된다.
+      * 즉, agent 입장에서는 항상 "지금 결정해야 하는 한 대"의 obs를 받는다.
+
+    Args:
+        episode_data: 하루분 episode 또는 그 리스트. 리스트면 학습 시 매
+            episode마다 random 회전하고, 평가 시 ``reset(options={"episode_idx": k})``
+            로 명시 선택할 수 있다. 모든 episode는 동일한 정류소 셋(N)을
+            가져야 한다.
+        n_trucks: 운용 트럭 수. obs/action 차원이 이에 맞춰 결정된다.
+        truck_capacity: 트럭 한 대의 최대 적재 수.
+        target_fill_ratio: 정류소별 목표 충전 비율(``capacity * 비율``).
+            도착 시 적재/하차 휴리스틱과 potential function의 기준이 된다.
+        w_stockout: 대여 실패 1건당 reward 가중치 (음수).
+        w_full: 반납 실패 1건당 reward 가중치 (음수).
+        w_travel_km: 트럭 이동 거리 1km당 reward 가중치 (음수).
+        w_travel_step: 이동 중 1 step당 reward 가중치 (음수).
+        max_travel_steps: obs의 ``remaining_steps`` 정규화 분모.
+        use_action_mask: ``action_masks()`` 활성화 여부. False면 항상 all-ones.
+        urgent_low_ratio: ``bikes/capacity`` 가 이 이하인 정류소는 빈-위급으로 본다.
+        urgent_high_ratio: ``bikes/capacity`` 가 이 이상인 정류소는 가득-위급으로 본다.
+        urgent_bonus: 위급 정류소 도착 시 추가되는 reward(보상 셰이핑).
+        strict_urgent_mask: True면 위급 정류소만 action 후보로 허용.
+        explore_bonus_scale: 방문 빈도 기반 탐색 보너스 계수(``c / sqrt(n)``).
+        shaping_scale: Potential-based shaping(Ng et al. 1999) 스케일. 0이면 비활성.
+        shaping_gamma: shaping에 사용하는 γ. agent γ와 일치시키는 게 권장.
+        w_work_per_bike: 이동한 자전거 1대당 양수 work reward.
+        w_idle_visit: 도착했는데 아무 자전거도 옮기지 못한 경우 페널티.
+            양수로 설정하면 음수로 적용된다.
+        future_demand_horizon: >0 이면 향후 N step의 정류소별 net flow를 obs에 추가.
+        seed: 환경 RNG 초기화 시드.
+
+    Notes:
+        Reward는 매 RL step에서 다음 항목의 합산으로 정의된다.
+
+        ::
+
+            reward = w_stockout * stockout
+                   + w_full * full
+                   + w_travel_km * km
+                   + w_travel_step * travel_step
+                   + urgent_bonus + explore_bonus + work_bonus
+                   + (potential-based shaping)
+    """
+
     metadata = {"render_modes": []}
 
     def __init__(
@@ -141,6 +201,17 @@ class RebalanceEnv(gym.Env):
     def reset(
         self, seed: int | None = None, options: dict[str, Any] | None = None
     ) -> tuple[np.ndarray, dict[str, Any]]:
+        """환경을 episode 시작 상태로 되돌린다.
+
+        Args:
+            seed: 새로 고정할 RNG 시드. None이면 기존 RNG를 그대로 사용.
+            options: ``"episode_idx"`` 키로 사용할 episode를 명시 선택할 수 있다
+                (평가용). 미지정이면 episode 풀에서 무작위 회전한다.
+
+        Returns:
+            ``(obs, info)`` 튜플. ``obs`` 는 첫 결정 시점(0번 트럭)의 observation,
+            ``info`` 는 누적 통계 dict.
+        """
         super().reset(seed=seed)
         if seed is not None:
             self._rng = np.random.default_rng(seed)
@@ -178,6 +249,16 @@ class RebalanceEnv(gym.Env):
     def step(
         self, action: int
     ) -> tuple[np.ndarray, float, bool, bool, dict[str, Any]]:
+        """현재 트럭에게 ``action`` 을 적용하고 다음 결정 시점까지 시간을 진행시킨다.
+
+        Args:
+            action: ``current_truck`` 의 다음 목적지 정류소 index.
+                ``action == truck.location`` 이면 자기 위치에 머무름(1 step 대기).
+
+        Returns:
+            Gymnasium 표준 5-튜플 ``(obs, reward, terminated, truncated, info)``.
+            ``terminated`` 는 episode 시간 ``T`` 가 끝났는지 여부를 의미한다.
+        """
         truck = self.trucks[self.current_truck]
         assert truck.is_idle, "current truck must be idle when step() is called"
 
@@ -308,9 +389,16 @@ class RebalanceEnv(gym.Env):
         return reward
 
     def _apply_rebalance(self, truck: TruckState) -> float:
-        """도착 정류소에서 적재/하차 휴리스틱 실행.
+        """도착 정류소에서 ``target_fill_ratio`` 기준 적재/하차 휴리스틱을 실행한다.
 
-        @return urgent_bonus + explore_bonus (둘 다 0이면 0.0).
+        - 현재량이 목표보다 많으면 trucker가 capacity 한도 내에서 빼낸다(적재).
+        - 적으면 자기 적재분과 정류소 capacity 한도 내에서 채운다(하차).
+        - 양쪽 보너스(``urgent_bonus``, ``explore_bonus_scale``)와 work reward를
+          내부에 누적한 뒤, 이번 도착에서 발생한 총 보너스를 반환한다.
+
+        Returns:
+            ``urgent_bonus + explore_bonus + work_bonus`` 합. 셰이핑 항목이
+            모두 0이면 0.0.
         """
         s = truck.location
         cap = int(self.data.capacity[s])
@@ -354,6 +442,20 @@ class RebalanceEnv(gym.Env):
     # Observation / Info
     # ------------------------------------------------------------------
     def _get_obs(self) -> np.ndarray:
+        """현재 상태를 학습용 observation vector로 인코딩한다.
+
+        구성(순서대로 concat):
+
+        1. 정류소별 자전거 점유율 ``(N,)``
+        2. 트럭 위치 idx 정규화 ``(n_trucks,)``
+        3. 트럭 적재 비율 ``(n_trucks,)``
+        4. 트럭 남은 이동 step 정규화 ``(n_trucks,)``
+        5. 현재 결정 대상 트럭 one-hot ``(n_trucks,)``
+        6. 시간 인코딩 sin/cos (시각 + episode 진행도) ``(4,)``
+        7. 캘린더 인코딩 sin/cos(dow) + is_weekend/holiday/holiday_eve ``(5,)``
+        8. 정규화된 현 step 날씨 ``(4,)``: temp/precip/wind/humidity
+        9. (옵션) 향후 ``future_demand_horizon`` step net flow ``(N,)``
+        """
         bike_ratio = self.bikes.astype(np.float32) / self.data.capacity.astype(np.float32)
         loc_norm = np.array(
             [tr.location / max(self.N - 1, 1) for tr in self.trucks], dtype=np.float32
@@ -459,6 +561,7 @@ class RebalanceEnv(gym.Env):
     get_action_mask = action_masks
 
     def _info(self) -> dict[str, Any]:
+        """누적 통계와 시계 상태를 담은 info dict를 만든다."""
         return {
             "t": self.t,
             "current_truck": self.current_truck,

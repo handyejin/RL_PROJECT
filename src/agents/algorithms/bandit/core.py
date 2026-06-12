@@ -49,7 +49,9 @@ import argparse
 import copy
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+import gymnasium as gym
 import numpy as np
 from tqdm.auto import tqdm
 
@@ -64,12 +66,27 @@ from src.agents.common.experiment_utils import (
 )
 from src.agents.common.future_demand import build_history_net_profile, maybe_wrap_future_demand
 from src.agents.common.vae_latent import attach_vae_latent_override, maybe_wrap_vae_latent
+from src.envs.data_loader import EpisodeData
 from src.envs.rebalance_env import RebalanceEnv
 
 
 @dataclass
 class LinUCBPolicy:
-    """Top-K rank action을 선택하는 disjoint LinUCB policy."""
+    """Top-K rank action 중 하나를 선택하는 disjoint LinUCB policy.
+
+    각 action마다 독립적인 ``(A_a, b_a)`` 통계량을 유지한다::
+
+        theta_a   = inv(A_a) @ b_a
+        score_a   = theta_a^T x_a + alpha * sqrt(x_a^T inv(A_a) x_a)
+        A_a      += x_a x_a^T
+        b_a      += reward * x_a
+
+    Attributes:
+        n_actions: 후보 action 수(= Top-K rank 수).
+        feature_dim: 각 후보의 feature 차원.
+        alpha: UCB exploration 가중치. 0이면 순수 exploitation.
+        l2: ``A_a`` 초기화에 사용하는 L2 ridge 강도.
+    """
 
     n_actions: int
     feature_dim: int
@@ -115,8 +132,13 @@ class LinUCBPolicy:
         self.b = np.asarray(state["b"], dtype=np.float64)
 
 
-def make_env(ep, args: argparse.Namespace, seed: int | None = None, for_eval: bool = False):
-    """공통 환경을 만들고 agent-local state/action wrapper를 적용한다."""
+def make_env(
+    ep: EpisodeData | list[EpisodeData],
+    args: argparse.Namespace,
+    seed: int | None = None,
+    for_eval: bool = False,
+) -> gym.Env:
+    """RebalanceEnv를 만들고 future-demand · VAE · Top-K wrapper를 적용한다."""
     env = RebalanceEnv(ep, seed=seed, **ENV_KW)
     env = maybe_wrap_future_demand(env, args)
     env = maybe_wrap_vae_latent(env, args)
@@ -124,7 +146,20 @@ def make_env(ep, args: argparse.Namespace, seed: int | None = None, for_eval: bo
 
 
 def candidate_features_from_obs(obs: np.ndarray, args: argparse.Namespace, n_actions: int) -> np.ndarray:
-    """observation 끝에 붙은 Top-K 후보 feature를 bandit feature로 변환한다."""
+    """observation 끝에 붙은 Top-K 후보 feature 블록을 bandit feature 행렬로 변환한다.
+
+    Args:
+        obs: Top-K wrapper가 적용된 환경의 observation. 마지막 ``top_k * dim``
+            원소가 후보 feature 블록이다.
+        args: ``candidate_top_k`` / ``candidate_feature_mode`` 를 가진 학습 설정.
+        n_actions: 후보 action 수(= Top-K).
+
+    Returns:
+        ``(top_k, feature_dim)`` 모양의 feature 행렬.
+
+    Raises:
+        ValueError: feature 블록이 observation에 충분히 들어 있지 않은 경우.
+    """
     top_k = int(getattr(args, "candidate_top_k", n_actions))
     feature_mode = getattr(args, "candidate_feature_mode", "none")
 
@@ -136,7 +171,7 @@ def candidate_features_from_obs(obs: np.ndarray, args: argparse.Namespace, n_act
         return np.asarray(obs[-needed:], dtype=np.float64).reshape(top_k, dim)
 
     # feature를 붙이지 않은 경우에도 실행은 가능하게 rank 기반 최소 feature를 만든다.
-    rows = []
+    rows: list[list[float]] = []
     for rank in range(top_k):
         rank_norm = rank / max(top_k - 1, 1)
         rows.append([1.0, rank_norm])
@@ -144,13 +179,18 @@ def candidate_features_from_obs(obs: np.ndarray, args: argparse.Namespace, n_act
 
 
 def run_episode(
-    env,
+    env: gym.Env,
     policy: LinUCBPolicy,
     args: argparse.Namespace,
     seed: int,
     train: bool,
 ) -> float:
-    """한 episode를 실행하고, train=True이면 step마다 LinUCB를 갱신한다."""
+    """한 episode를 굴리며 reward 합을 반환한다.
+
+    ``train=True`` 인 경우 매 step마다 선택한 action의 LinUCB 통계량을 갱신한다.
+    update에는 숫자 안정성을 위해 ``bandit_reward_scale`` 이 곱해진 reward가
+    들어가지만, 반환되는 reward 합은 항상 원본 환경 reward 기준이다.
+    """
     state, _ = env.reset(seed=seed)
     done = False
     total = 0.0
@@ -173,8 +213,13 @@ def run_episode(
     return total
 
 
-def evaluate(policy: LinUCBPolicy, episodes: list, args: argparse.Namespace, seed: int) -> tuple[float, list[float]]:
-    """고정 평가셋에서 exploration bonus 없이 greedy bandit policy를 평가한다."""
+def evaluate(
+    policy: LinUCBPolicy,
+    episodes: list[EpisodeData],
+    args: argparse.Namespace,
+    seed: int,
+) -> tuple[float, list[float]]:
+    """고정 평가셋에서 exploration bonus 없이 greedy bandit policy의 reward를 측정한다."""
     rewards = []
     for ep in episodes:
         env = make_env(ep, args, seed=seed, for_eval=True)
